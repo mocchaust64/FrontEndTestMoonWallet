@@ -1,5 +1,5 @@
 {
-  "address": "DeN1rBfabZezHPvrq9q7BbzUbZkrjnHE1kQDrPK8kWQ3",
+  "address": "5tFJskbgqrPxb992SUf6JzcQWJGbJuvsta2pRnZBcygN",
   "metadata": {
     "name": "moon_wallet_program",
     "version": "0.1.0",
@@ -487,6 +487,16 @@
       "code": 6022,
       "name": "InactiveGuardian",
       "msg": "Guardian đang không hoạt động"
+    },
+    {
+      "code": 6023,
+      "name": "ArithmeticOverflow",
+      "msg": "Lỗi tràn số trong phép tính"
+    },
+    {
+      "code": 6024,
+      "name": "InsufficientFunds",
+      "msg": "Không đủ SOL trong tài khoản"
     }
   ],
   "types": [

@@ -5,7 +5,7 @@ import idlFile from '../idl/moon_wallet_program.json';
 import { Connection, sendAndConfirmTransaction } from '@solana/web3.js';
 
 // Export programID từ biến môi trường thay vì hardcode
-export const programID = new PublicKey(process.env.REACT_APP_PROGRAM_ID || 'DeN1rBfabZezHPvrq9q7BbzUbZkrjnHE1kQDrPK8kWQ3');
+export const programID = new PublicKey(process.env.REACT_APP_PROGRAM_ID || '5tFJskbgqrPxb992SUf6JzcQWJGbJuvsta2pRnZBcygN');
 
 // Hằng số cho chương trình secp256r1
 export const SECP256R1_PROGRAM_ID = new PublicKey('Secp256r1SigVerify1111111111111111111111111');

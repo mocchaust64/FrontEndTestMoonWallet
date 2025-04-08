@@ -19,7 +19,7 @@ import { TransferForm } from './components/TransferForm';
 
 
 const RPC_ENDPOINT = process.env.REACT_APP_RPC_ENDPOINT || 'http://127.0.0.1:8899'; // Localhost validator
-const PROGRAM_ID_STRING = process.env.REACT_APP_PROGRAM_ID || 'DeN1rBfabZezHPvrq9q7BbzUbZkrjnHE1kQDrPK8kWQ3'; // Program ID mới triển khai
+const PROGRAM_ID_STRING = process.env.REACT_APP_PROGRAM_ID || '5tFJskbgqrPxb992SUf6JzcQWJGbJuvsta2pRnZBcygN'; // Program ID mới triển khai
 
 export const PROGRAM_ID = new PublicKey(PROGRAM_ID_STRING);
 
