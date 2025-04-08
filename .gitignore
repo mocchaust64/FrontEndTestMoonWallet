@@ -42,6 +42,7 @@ test-program.json
 # Cache
 .cache/
 .eslintcache
+node_modules/.cache/
 
 # Optional npm cache directory
 .npm
