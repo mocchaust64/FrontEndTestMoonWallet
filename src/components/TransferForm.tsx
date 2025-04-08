@@ -206,6 +206,29 @@ export const TransferForm: React.FC<TransferFormProps> = ({
     checkPrograms();
   }, [connection]);
   
+  // Thêm hàm cập nhật số dư
+  const updateWalletBalance = async () => {
+    try {
+      if (!credentialId) return;
+      
+      const guardianInfo = await getWalletByCredentialId(credentialId);
+      if (!guardianInfo) return;
+
+      const multisigPDA = new PublicKey(guardianInfo.walletAddress);
+      const balance = await connection.getBalance(multisigPDA);
+      setWalletBalance(balance / LAMPORTS_PER_SOL);
+    } catch (error) {
+      console.error('Lỗi khi cập nhật số dư:', error);
+    }
+  };
+
+  // Gọi updateWalletBalance khi giao dịch thành công
+  useEffect(() => {
+    if (txStatus === TransactionStatus.SUCCESS) {
+      updateWalletBalance();
+    }
+  }, [txStatus]);
+
   // Cập nhật walletBalance khi pdaBalance thay đổi
   useEffect(() => {
     if (pdaBalance !== undefined) {
