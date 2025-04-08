@@ -113,7 +113,9 @@ const GuardianSignup: React.FC = () => {
       await saveWebAuthnCredentialMapping(
         webAuthnResult.credentialId,
         inviteData.multisigAddress,
-        Array.from(new Uint8Array(compressedKeyBuffer))
+        Array.from(new Uint8Array(compressedKeyBuffer)),
+        inviteData.guardianId,
+        inviteData.guardianName
       );
       
       setStatus(prev => prev + '\nĐã lưu ánh xạ WebAuthn credential thành công!');

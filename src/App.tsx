@@ -13,8 +13,11 @@ import {
   getPendingInvites,
   deleteGuardianData
 } from './firebase/guardianService';
-import { getWalletByCredentialId } from './firebase/webAuthnService';
-import { saveWebAuthnCredentialMapping } from './firebase/webAuthnService';
+import { 
+  getWalletByCredentialId, 
+  saveWebAuthnCredentialMapping,
+  getCredentialsByWallet
+} from './firebase/webAuthnService';
 import { TransferForm } from './components/TransferForm';
 
 
@@ -505,7 +508,9 @@ function App() {
           await saveWebAuthnCredentialMapping(
             rawIdBase64,  // credential ID
             multisigPDA.toString(), // địa chỉ ví multisig
-            Array.from(new Uint8Array(compressedKeyBuffer)) // public key đã nén
+            Array.from(new Uint8Array(compressedKeyBuffer)), // public key đã nén
+            1, // guardianId mặc định là 1 cho guardian đầu tiên
+            walletName // tên ví
           );
           
           console.log("Đã lưu ánh xạ WebAuthn credential vào Firebase:", {
@@ -560,15 +565,31 @@ function App() {
   const loadPdaBalance = async (pdaAddress: PublicKey) => {
     try {
       setIsLoadingPdaBalance(true);
+      console.log("Đang load số dư cho PDA:", pdaAddress.toString());
+      
+      // Kiểm tra xem PDA có tồn tại không
+      const accountInfo = await connection.getAccountInfo(pdaAddress);
+      if (!accountInfo) {
+        console.warn("PDA không tồn tại trên blockchain");
+        setPdaBalance(0);
+        return;
+      }
+      
       const balance = await connection.getBalance(pdaAddress);
-      console.log(`PDA balance: ${balance / 1_000_000_000} SOL`);
-      setPdaBalance(balance / 1_000_000_000);
+      const balanceInSol = balance / 1_000_000_000;
+      console.log(`PDA balance: ${balanceInSol} SOL`);
+      setPdaBalance(balanceInSol);
+      
+      // Cập nhật lại state multisigAddress để đảm bảo đồng bộ
+      if (!multisigAddress || !multisigAddress.equals(pdaAddress)) {
+        setMultisigAddress(pdaAddress);
+      }
     } catch (error) {
       console.error("Lỗi khi load balance của PDA:", error);
+      setPdaBalance(0);
     } finally {
       setIsLoadingPdaBalance(false);
     }
-
   };
   const findGuardianAddress = async (guardianId: number = 1) => {
     if (!multisigAddress) return null;
@@ -1319,38 +1340,40 @@ function App() {
         // 2. Truy vấn thông tin ví từ bảng webauthn_credentials
         const credentialMapping = await getWalletByCredentialId(credentialIdHex);
         
+        let walletAddress: PublicKey;
+        let guardianId: number | null = null;
+        
         if (credentialMapping) {
           // Nếu tìm thấy trong bảng ánh xạ
           setTransactionStatus(prev => prev + `\nĐã tìm thấy thông tin ví trong database!`);
           
           // Chuyển đổi từ chuỗi sang PublicKey
-          const walletAddressFromDB = new PublicKey(credentialMapping.walletAddress);
-          console.log("Wallet address from database:", walletAddressFromDB.toString());
+          walletAddress = new PublicKey(credentialMapping.walletAddress);
+          console.log("Wallet address from database:", walletAddress.toString());
+          
+          // Lấy guardianId từ credential mapping
+          guardianId = credentialMapping.guardianId;
           
           // 3. Kiểm tra xem ví có tồn tại trên blockchain không
-          const walletAccount = await connection.getAccountInfo(walletAddressFromDB);
+          const walletAccount = await connection.getAccountInfo(walletAddress);
           
           if (!walletAccount) {
-            setTransactionStatus(`Ví tìm thấy trong database không tồn tại trên blockchain. Địa chỉ: ${walletAddressFromDB.toString()}`);
+            setTransactionStatus(`Ví tìm thấy trong database không tồn tại trên blockchain. Địa chỉ: ${walletAddress.toString()}`);
             setIsLoggingIn(false);
             return;
           }
           
-          // 4. Cập nhật state với thông tin ví
-          setMultisigAddress(walletAddressFromDB);
-          setCredentialId(rawIdBase64); // Lưu credential ID gốc
-          
-          setTransactionStatus(prev => prev + `\nĐã tìm thấy ví tại địa chỉ: ${walletAddressFromDB.toString()}\n\nBước 3: Đang tải thông tin ví...`);
+          setTransactionStatus(prev => prev + `\nĐã tìm thấy ví tại địa chỉ: ${walletAddress.toString()}\n\nBước 3: Đang tải thông tin ví...`);
         } else {
           // Nếu không tìm thấy trong bảng ánh xạ, sử dụng phương pháp tính toán cũ
           setTransactionStatus(prev => prev + '\nKhông tìm thấy thông tin trong database, đang tính toán địa chỉ ví...');
           
           // Tính địa chỉ ví từ credential ID
-          const multisigPDA = getMultisigPDA(rawIdBase64);
-          console.log("Computed Multisig PDA:", multisigPDA.toString());
+          walletAddress = getMultisigPDA(rawIdBase64);
+          console.log("Computed Multisig PDA:", walletAddress.toString());
           
           // Kiểm tra xem ví có tồn tại không
-          const walletAccount = await connection.getAccountInfo(multisigPDA);
+          const walletAccount = await connection.getAccountInfo(walletAddress);
           
           if (!walletAccount) {
             setTransactionStatus(`Không tìm thấy ví với credential này. Có thể bạn cần tạo ví mới.`);
@@ -1358,24 +1381,44 @@ function App() {
             return;
           }
           
-          setTransactionStatus(prev => prev + `\nĐã tìm thấy ví tại địa chỉ: ${multisigPDA.toString()}\n\nBước 3: Đang tải thông tin ví...`);
+          // Tìm guardianId từ bảng guardians
+          const guardians = await getCredentialsByWallet(walletAddress.toString());
+          if (guardians.length > 0) {
+            guardianId = guardians[0].guardianId;
+            // Cập nhật lại thông tin trong webauthn_credentials
+            if (guardianId !== null) {
+              const credentialIdArray = Buffer.from(credentialId, 'hex');
+              await saveWebAuthnCredentialMapping(
+                credentialIdHex,
+                walletAddress.toString(),
+                Array.from(credentialIdArray),
+                guardianId
+              );
+            }
+          }
           
-          // Cập nhật state với thông tin ví
-          setMultisigAddress(multisigPDA);
-          setCredentialId(rawIdBase64); // Lưu credential ID gốc
+          setTransactionStatus(prev => prev + `\nĐã tìm thấy ví tại địa chỉ: ${walletAddress.toString()}\n\nBước 3: Đang tải thông tin ví...`);
         }
         
+        // Cập nhật state với thông tin ví
+        setMultisigAddress(walletAddress);
+        setCredentialId(rawIdBase64); // Lưu credential ID gốc
+        
         // 5. Tìm guardian PDA
-        await findGuardianAddress(1); // Tìm guardian chính (owner)
+        if (guardianId) {
+          await findGuardianAddress(guardianId); // Tìm guardian với ID đã biết
+        } else {
+          await findGuardianAddress(1); // Tìm guardian chính (owner)
+        }
         
         // 6. Tải số dư và danh sách guardian
-        await loadPdaBalance(multisigAddress!);
+        await loadPdaBalance(walletAddress);
         await getExistingGuardianIds();
         
         // 7. Hoàn thành đăng nhập
         setIsLoggedIn(true);
         setIsLoggingIn(false);
-        setTransactionStatus(`Đăng nhập thành công!\n\nĐịa chỉ ví: ${multisigAddress!.toString()}\nSố guardian: ${existingGuardians.length}`);
+        setTransactionStatus(`Đăng nhập thành công!\n\nĐịa chỉ ví: ${walletAddress.toString()}\nSố guardian: ${existingGuardians.length}`);
         
         // 8. Ẩn form đăng nhập
         setShowLoginForm(false);
@@ -1428,7 +1471,8 @@ function App() {
           guardianId: newGuardianId,
           inviteCode,
           status: 'pending',
-          ownerId: projectFeePayerKeypair?.publicKey.toString() || ''
+          ownerId: projectFeePayerKeypair?.publicKey.toString() || '',
+          guardianName: `Guardian ${newGuardianId}` // Thêm tên guardian mặc định
         });
       } catch (error) {
         console.error("Lỗi khi lưu vào Firebase:", error)

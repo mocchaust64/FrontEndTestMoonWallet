@@ -15,8 +15,10 @@ import { getWalletByCredentialId } from '../firebase/webAuthnService';
 import { Buffer } from 'buffer';
 import BN from 'bn.js';
 import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex } from '@noble/hashes/utils';
-import { BorshAccountsCoder } from '@coral-xyz/anchor';
+import { getCredentialsByWallet } from '../firebase/webAuthnService';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
+
 
 // Thêm hằng số cho chuẩn hóa signature
 const SECP256R1_ORDER = new BN('FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551', 16);
@@ -215,38 +217,71 @@ export const TransferForm: React.FC<TransferFormProps> = ({
   useEffect(() => {
     const loadWalletInfo = async () => {
       try {
-        if (!walletAddress) return;
+        if (!credentialId) return;
         
-        // Tính PDA của ví từ credential ID
-        const multisigPDA = await getMultisigPDA(credentialId);
+        // Lấy thông tin guardian từ Firebase
+        const guardianInfo = await getWalletByCredentialId(credentialId);
+        if (!guardianInfo) {
+          throw new Error('Không tìm thấy thông tin guardian trong Firebase');
+        }
+
+        // Sử dụng địa chỉ ví từ Firebase
+        const multisigPDA = new PublicKey(guardianInfo.walletAddress);
+        console.log('Địa chỉ ví từ Firebase:', multisigPDA.toBase58());
+        
+        // Kiểm tra xem guardianInfo có guardianId không
+        if (!guardianInfo.guardianId) {
+          // Nếu không có guardianId, thử lấy từ bảng guardians
+          const guardians = await getCredentialsByWallet(guardianInfo.walletAddress);
+          if (guardians.length > 0) {
+            // Sử dụng guardian đầu tiên
+            const firstGuardian = guardians[0];
+            if (firstGuardian.guardianId) {
+              // Cập nhật lại thông tin guardian
+              await updateDoc(doc(db, "webauthn_credentials", firstGuardian.credentialId), {
+                guardianId: firstGuardian.guardianId
+              });
+              // Sử dụng guardianId từ bảng guardians
+              const guardianPDA = await getGuardianPDA(multisigPDA, firstGuardian.guardianId);
+              console.log('GuardianPDA:', guardianPDA.toBase58());
+            } else {
+              throw new Error('Không tìm thấy guardianId trong thông tin guardian');
+            }
+          } else {
+            throw new Error('Không tìm thấy thông tin guardian trong bảng guardians');
+          }
+        } else {
+          // Sử dụng guardianId từ bảng webauthn_credentials
+          const guardianPDA = await getGuardianPDA(multisigPDA, guardianInfo.guardianId);
+          console.log('GuardianPDA:', guardianPDA.toBase58());
+        }
         
         // Lấy thông tin account
         const accountInfo = await connection.getAccountInfo(multisigPDA);
         
         if (!accountInfo) {
-          console.error('Không tìm thấy thông tin ví');
+          console.error('Không tìm thấy thông tin ví trên blockchain');
           return;
         }
         
         try {
-          // Đọc nonce từ account data (từ vị trí thích hợp theo layout)
-          // Giả sử nonce nằm ở offset 18 (8 bytes for discriminator + 1 byte threshold + 1 byte guardian_count + 8 bytes recovery_nonce)
+          // Đọc nonce từ account data
           const transactionNonce = accountInfo.data.readBigUInt64LE(18);
           setNonce(Number(transactionNonce));
           console.log("Transaction nonce hiện tại:", Number(transactionNonce));
         } catch (error) {
           console.error("Lỗi khi đọc nonce từ account data:", error);
-          // Fallback về nonce = 0 nếu không đọc được
           setNonce(0);
         }
         
       } catch (error) {
         console.error('Lỗi khi tải thông tin ví:', error);
+        setError(error instanceof Error ? error.message : 'Lỗi không xác định');
       }
     };
     
     loadWalletInfo();
-  }, [walletAddress, credentialId, connection]);
+  }, [credentialId, connection]);
   
   // Xử lý khi nhập địa chỉ đích
   const handleDestinationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -301,13 +336,24 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       if (!amount || parseFloat(amount) <= 0) {
         throw new Error('Vui lòng nhập số lượng SOL hợp lệ');
       }
+
+      // Lấy thông tin guardian từ Firebase
+      const guardianInfo = await getWalletByCredentialId(credentialId);
+      if (!guardianInfo) {
+        throw new Error('Không tìm thấy thông tin guardian trong Firebase');
+      }
+
+      // Sử dụng địa chỉ ví từ Firebase
+      const multisigPDA = new PublicKey(guardianInfo.walletAddress);
+      console.log('Địa chỉ ví từ Firebase:', multisigPDA.toBase58());
+
+      // Kiểm tra xem guardianInfo có guardianId không
+      if (!guardianInfo.guardianId) {
+        throw new Error('Không tìm thấy guardianId trong thông tin guardian');
+      }
       
-      // Lấy PDA từ credential ID
-      const multisigPDA = await getMultisigPDA(credentialId);
-      console.log('MultisigPDA:', multisigPDA.toBase58());
-      
-      // Lấy PDA của guardian
-      const guardianPDA = await getGuardianPDA(multisigPDA, guardianId);
+      // Lấy PDA của guardian từ thông tin trong Firebase
+      const guardianPDA = await getGuardianPDA(multisigPDA, guardianInfo.guardianId);
       console.log('GuardianPDA:', guardianPDA.toBase58());
       
       // Chuyển đổi SOL sang lamports
@@ -1265,4 +1311,6 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       </style>
     </div>
   );
-}; 
+};
+
+export default TransferForm; 

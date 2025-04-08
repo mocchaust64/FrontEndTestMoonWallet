@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
-import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import GuardianSignup from './components/GuardianSignup';
 
 // Thêm khai báo global cho Buffer
@@ -20,7 +20,7 @@ const root = ReactDOM.createRoot(
 );
 root.render(
   <React.StrictMode>
-    <Router>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="guardian-signup/:inviteCode" element={<GuardianSignup />} />
@@ -39,6 +39,6 @@ root.render(
           </div>
         } />
       </Routes>
-    </Router>
+    </HashRouter>
   </React.StrictMode>
 );

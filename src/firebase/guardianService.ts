@@ -28,6 +28,7 @@ export interface InviteData {
   ownerId: string;
   status: 'pending' | 'ready' | 'completed';
   createdAt: Timestamp;
+  guardianName?: string;
 }
 
 // Lưu thông tin invitation khi tạo mã mời
@@ -41,6 +42,7 @@ export const saveInvitation = async (inviteData: Omit<InviteData, 'createdAt'>):
       ...inviteData,
       inviteCode,
       createdAt: serverTimestamp(),
+      guardianName: inviteData.guardianName || `Guardian ${inviteData.guardianId}` // Thêm tên guardian mặc định
     });
 
     // Tạo document theo inviteCode để dễ truy vấn
