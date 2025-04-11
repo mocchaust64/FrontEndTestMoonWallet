@@ -1,16 +1,18 @@
 import { PublicKey } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import { PROGRAM_ID } from '../App';
+import { PROGRAM_ID } from '../utils/constants';
 
 /**
  * Xử lý credential ID để tạo seed cho PDA
  * Cách xử lý này phải khớp với hàm process_credential_id_seed trong smart contract
  */
-export const processCredentialIdForPDA = (credentialId: string): Uint8Array => {
-  const credentialBuffer = Buffer.from(credentialId);
+export const processCredentialIdForPDA = (credentialId: string | Buffer): Uint8Array => {
+  // Đảm bảo credentialId là Buffer
+  const credentialBuffer = typeof credentialId === 'string' 
+    ? Buffer.from(credentialId) 
+    : credentialId;
   
   console.log("FRONTEND - processCredentialIdForPDA");
-  console.log("Input credential ID:", credentialId);
   console.log("Credential buffer length:", credentialBuffer.length);
   console.log("Credential buffer bytes:", Array.from(credentialBuffer));
   
@@ -40,8 +42,9 @@ export const processCredentialIdForPDA = (credentialId: string): Uint8Array => {
 
 /**
  * Lấy multisig PDA dựa vào credential ID
+ * @param credentialId Có thể là string hoặc Buffer
  */
-export const getMultisigPDA = (credentialId: string): PublicKey => {
+export const getMultisigPDA = (credentialId: string | Buffer): PublicKey => {
   const seedBuffer = processCredentialIdForPDA(credentialId);
   
   const [pda] = PublicKey.findProgramAddressSync(

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Connection, PublicKey, Keypair, Transaction, SystemProgram, TransactionInstruction, Commitment, Signer, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import './App.css';
 import { createWebAuthnCredential, getWebAuthnAssertionForLogin, calculateMultisigAddress, getWebAuthnAssertion } from './utils/webauthnUtils';
 import { processCredentialIdForPDA, getMultisigPDA, getGuardianPDA, getAllGuardianPDAs } from './utils/credentialUtils';
@@ -19,14 +20,14 @@ import {
   getCredentialsByWallet
 } from './firebase/webAuthnService';
 import { TransferForm } from './components/TransferForm';
-
+// Import các components
+import { MultisigPanel } from './components/MultisigPanel';
+import ProposalList from './components/ProposalList';
+import ProposalDetail from './components/ProposalDetail';
+import { ProgramProvider } from './contexts/ProgramContext';
+import { PROGRAM_ID } from './utils/constants';
 
 const RPC_ENDPOINT = process.env.REACT_APP_RPC_ENDPOINT || 'http://127.0.0.1:8899'; // Localhost validator
-const PROGRAM_ID_STRING = process.env.REACT_APP_PROGRAM_ID || '5tFJskbgqrPxb992SUf6JzcQWJGbJuvsta2pRnZBcygN'; // Program ID mới triển khai
-
-export const PROGRAM_ID = new PublicKey(PROGRAM_ID_STRING);
-
-
 
 // Tùy chọn kết nối
 const connectionOptions = {
@@ -38,24 +39,6 @@ const connectionOptions = {
 
 // Connection với validator
 const connection = new Connection(RPC_ENDPOINT, connectionOptions);
-
-// Schema cho các struct của chương trình
-class ActionParams {
-  amount: number | null;
-  destination: PublicKey | null;
-  tokenMint: PublicKey | null;
-
-  constructor(props: { 
-    amount: number | null; 
-    destination: PublicKey | null; 
-    tokenMint: PublicKey | null 
-  }) {
-    this.amount = props.amount;
-    this.destination = props.destination;
-    this.tokenMint = props.tokenMint;
-  }
-}
-
 
 
 function bufferToUint8Array(buffer: Buffer): Uint8Array {
@@ -89,22 +72,13 @@ const bigIntToLeBytes = (value: bigint, bytesLength: number = 8): Uint8Array => 
   return result;
 };
 
-
-
-
-// Hàm nén khóa công khai từ dạng uncompressed (65 bytes) sang compressed (33 bytes)
 const compressPublicKey = (uncompressedKey: Buffer): Buffer => {
-  // Đảm bảo khóa bắt đầu với byte 0x04 (không nén)
   if (uncompressedKey[0] !== 0x04 || uncompressedKey.length !== 65) {
     console.warn('Khóa không đúng định dạng không nén ECDSA, tạo khóa ngẫu nhiên');
-    // Tạo khóa random nếu không đúng định dạng
     const randomKey = Buffer.alloc(33);
-    randomKey[0] = 0x02; // compressed, y is even
-    
+    randomKey[0] = 0x02; 
     const randomBytes = new Uint8Array(32);
     crypto.getRandomValues(randomBytes);
-    
-    // Sao chép vào buffer
     for (let i = 0; i < 32; i++) {
       randomKey[i+1] = randomBytes[i];
     }
@@ -130,7 +104,6 @@ const compressPublicKey = (uncompressedKey: Buffer): Buffer => {
   
   return compressedKey;
 };
-
 // Hàm hash recovery phrase tại frontend
 const hashRecoveryPhrase = async (phrase: string): Promise<Uint8Array> => {
   // Chuyển recovery phrase thành bytes
@@ -169,9 +142,16 @@ const convertSecretKeyStringToUint8Array = (secretKeyString: string | undefined)
   return new Uint8Array(bytes);
 };
 
+// Context Provider cho ứng dụng
+const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <ProgramProvider>
+      {children}
+    </ProgramProvider>
+  );
+};
 
-
-
+// Main App Component
 function App() {
   const [walletKeypair, setWalletKeypair] = useState<Keypair | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
@@ -218,6 +198,15 @@ function App() {
   const [showQRCode, setShowQRCode] = useState<boolean>(false);
   const [showInviteInput, setShowInviteInput] = useState<boolean>(false);
   const [pendingInvites, setPendingInvites] = useState<string[]>([]);
+
+  // Lưu địa chỉ ví vào localStorage khi tìm thấy
+  useEffect(() => {
+    if (multisigAddress) {
+      // Lưu địa chỉ ví vào localStorage để sử dụng sau này
+      localStorage.setItem('multisigAddress', multisigAddress.toString());
+      console.log("Đã lưu địa chỉ ví vào localStorage:", multisigAddress.toString());
+    }
+  }, [multisigAddress]);
 
   // Tạo keypair mới khi component được mount
   useEffect(() => {
@@ -500,9 +489,6 @@ function App() {
         
         await connection.confirmTransaction(addGuardianSignature);
         setTransactionStatus(prev => prev + `\nGuardian owner đã được thêm thành công! Signature: ${addGuardianSignature}`);
-        
-        // Lưu ánh xạ WebAuthn credential vào Firebase để sử dụng sau này
-        // THÊM ĐOẠN NÀY: Lưu credential ID và public key vào Firebase
         try {
           // Lưu ánh xạ WebAuthn credential vào Firebase
           await saveWebAuthnCredentialMapping(
@@ -510,13 +496,15 @@ function App() {
             multisigPDA.toString(), // địa chỉ ví multisig
             Array.from(new Uint8Array(compressedKeyBuffer)), // public key đã nén
             1, // guardianId mặc định là 1 cho guardian đầu tiên
-            walletName // tên ví
+            walletName, // tên ví
+            threshold // ngưỡng ký của ví
           );
           
           console.log("Đã lưu ánh xạ WebAuthn credential vào Firebase:", {
             credentialId: rawIdBase64,
             walletAddress: multisigPDA.toString(),
-            publicKeyLength: compressedKeyBuffer.length
+            publicKeyLength: compressedKeyBuffer.length,
+            threshold: threshold
           });
           
           // Lưu thông tin vào localStorage để có backup
@@ -524,7 +512,8 @@ function App() {
             const webauthnMapping = {
               credentialId: rawIdBase64,
               walletAddress: multisigPDA.toString(),
-              guardianPublicKey: Array.from(new Uint8Array(compressedKeyBuffer))
+              guardianPublicKey: Array.from(new Uint8Array(compressedKeyBuffer)),
+              threshold: threshold
             };
             
             localStorage.setItem('webauthn_credential_' + rawIdBase64, JSON.stringify(webauthnMapping));
@@ -1725,7 +1714,7 @@ Guardian đã sẵn sàng để sử dụng trong ví multisig của bạn.`);
             <div className="connection-info">
               <h2>Thông tin kết nối</h2>
               <p>Đang kết nối tới: <strong>{RPC_ENDPOINT}</strong></p>
-              <p>Program ID: <strong>{PROGRAM_ID_STRING}</strong></p>
+              <p>Program ID: <strong>{PROGRAM_ID.toString()}</strong></p>
               <p>Fee Payer: <strong>{projectFeePayerKeypair ? projectFeePayerKeypair.publicKey.toString() : 'Chưa khởi tạo'}</strong></p>
               <p>Số dư Fee Payer: <strong>{isLoadingFeePayerBalance ? 'Đang tải...' : `${feePayerBalance} SOL`}</strong></p>
               <div className="button-row">
@@ -1988,6 +1977,12 @@ Guardian đã sẵn sàng để sử dụng trong ví multisig của bạn.`);
                   <button onClick={() => testGuardianInfo(1)} className="btn btn-sm btn-info">Kiểm tra Guardian 1</button>
                   <button onClick={() => testGuardianInfo(2)} className="btn btn-sm btn-info">Kiểm tra Guardian 2</button>
                   <button onClick={() => testGuardianInfo(3)} className="btn btn-sm btn-info">Kiểm tra Guardian 3</button>
+                  <button 
+                    onClick={() => window.location.href = `${window.location.origin}/#/multisig-test`} 
+                    className="btn btn-sm btn-primary"
+                  >
+                    Kiểm thử đa chữ ký
+                  </button>
                 </div>
               </div>
             )}
@@ -2030,6 +2025,15 @@ Guardian đã sẵn sàng để sử dụng trong ví multisig của bạn.`);
           </div>
         </div>
       </div>
+      {multisigAddress && (
+        <div className="multisig-test-section">
+          <h2>Kiểm thử đa chữ ký</h2>
+          <MultisigPanel 
+            credentialId={Buffer.from(credentialId, 'base64')} 
+            connection={connection} 
+          />
+        </div>
+      )}
     </div>
   );
 }

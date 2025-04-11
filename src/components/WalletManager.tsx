@@ -21,8 +21,7 @@ import {
 } from '../utils/webauthnUtils';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
-// Chuyển đổi IDL một lần
-const idl = convertIdl(idlFile);
+
 
 // Thêm prop onWalletCreated vào interface
 interface WalletManagerProps {

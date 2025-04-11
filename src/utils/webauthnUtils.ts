@@ -375,11 +375,7 @@ export const verifyWebAuthnSignature = async (
   }
 };
 
-// Hàm tiện ích để chuyển đổi Buffer sang Uint8Array phù hợp với yêu cầu
-function bufferToUint8Array(buffer: Buffer): Uint8Array {
-  // Tạo một Uint8Array mới từ Buffer để tránh các vấn đề về tương thích
-  return new Uint8Array(buffer);
-}
+
 
 // Sửa lại hàm copy để tránh lỗi về type
 function copyBuffer(source: Buffer, target: Buffer, targetStart = 0, sourceStart = 0, sourceEnd = source.length): void {
@@ -464,6 +460,18 @@ const derToRaw = (signature: Buffer): Uint8Array => {
     console.log('r length:', r.length, 'r (hex):', r.toString('hex'));
     console.log('s length:', s.length, 's (hex):', s.toString('hex'));
     
+    // Xử lý trường hợp r có 33 bytes với byte đầu tiên là 0x00
+    if (r.length === 33 && r[0] === 0x00) {
+      console.log('Phát hiện r dài 33 bytes với byte đầu 0x00, loại bỏ byte này');
+      r = r.slice(1);
+    }
+    
+    // Xử lý trường hợp s có 33 bytes với byte đầu tiên là 0x00
+    if (s.length === 33 && s[0] === 0x00) {
+      console.log('Phát hiện s dài 33 bytes với byte đầu 0x00, loại bỏ byte này');
+      s = s.slice(1);
+    }
+    
     // Chuẩn bị r và s cho định dạng raw (mỗi phần 32 bytes)
     const rPadded = new Uint8Array(32);
     const sPadded = new Uint8Array(32);
@@ -472,7 +480,7 @@ const derToRaw = (signature: Buffer): Uint8Array => {
       // Trường hợp r ngắn hơn 32 bytes, thêm padding
       rPadded.set(new Uint8Array(r), 32 - r.length);
     } else {
-      // Trường hợp r dài hơn 32 bytes (thường là có byte 0x00 ở đầu), lấy 32 bytes cuối
+      // Trường hợp r dài hơn 32 bytes, lấy 32 bytes cuối
       rPadded.set(new Uint8Array(r.slice(r.length - 32)));
     }
     
@@ -560,10 +568,10 @@ export const getWebAuthnAssertion = async (credentialId: string | null, message?
   const options: PublicKeyCredentialRequestOptions = {
     challenge: challenge,
     timeout: 60000,
-    userVerification: 'required' // Bắt buộc xác thực người dùng (TouchID, FaceID, v.v.)
+    userVerification: 'discouraged' // Thay đổi 'required' thành 'discouraged' để không bắt buộc xác thực sinh trắc học
   };
 
-  // Nếu có credentialId cụ thể, đặt allowCredentials
+  // Nếu có credentialId cụ thể và không cho phép empty, đặt allowCredentials 
   if (credentialId && !allowEmpty) {
     try {
       // Chuyển đổi từ hex sang buffer
@@ -577,6 +585,9 @@ export const getWebAuthnAssertion = async (credentialId: string | null, message?
     } catch (error) {
       console.error("Lỗi khi parse credentialId:", error);
     }
+  } else {
+    // Không chỉ định allowCredentials để hiển thị tất cả các credentials có sẵn
+    console.log("Hiển thị danh sách tất cả các credentials để người dùng chọn");
   }
 
   try {
@@ -739,4 +750,28 @@ export const calculateMultisigAddress = (
     ],
     programId
   );
+};
+
+/**
+ * Tạo verification data từ WebAuthn assertion
+ * @param assertion - WebAuthn assertion
+ * @returns Uint8Array chứa dữ liệu verification (authenticatorData + hash(clientDataJSON))
+ */
+export const createWebAuthnVerificationData = async (
+  assertion: {
+    signature: Uint8Array;
+    authenticatorData: Uint8Array;
+    clientDataJSON: Uint8Array;
+  }
+): Promise<Uint8Array> => {
+  // 1. Tính hash của clientDataJSON
+  const clientDataHash = await crypto.subtle.digest('SHA-256', assertion.clientDataJSON);
+  const clientDataHashBytes = new Uint8Array(clientDataHash);
+  
+  // 2. Tạo verification data: authenticatorData + hash(clientDataJSON)
+  const verificationData = new Uint8Array(assertion.authenticatorData.length + clientDataHashBytes.length);
+  verificationData.set(new Uint8Array(assertion.authenticatorData), 0);
+  verificationData.set(clientDataHashBytes, assertion.authenticatorData.length);
+  
+  return verificationData;
 };

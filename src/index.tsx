@@ -4,6 +4,8 @@ import './index.css';
 import App from './App';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import GuardianSignup from './components/GuardianSignup';
+import ProposalList from './components/ProposalList';
+
 
 // Thêm khai báo global cho Buffer
 declare global {
@@ -24,6 +26,7 @@ root.render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="guardian-signup/:inviteCode" element={<GuardianSignup />} />
+        <Route path="proposals" element={<ProposalList />} />
         <Route path="*" element={
           <div style={{ padding: '40px', textAlign: 'center' }}>
             <h1>404 - Không tìm thấy trang</h1>

@@ -1,11 +1,14 @@
-import { web3, BN } from '@coral-xyz/anchor';
+import { web3 } from '@coral-xyz/anchor';
 import { PublicKey, Transaction, Keypair, SystemProgram, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import idlFile from '../idl/moon_wallet_program.json';
 import { Connection, sendAndConfirmTransaction } from '@solana/web3.js';
+import { PROGRAM_ID } from '../utils/constants';
+import BN from 'bn.js';
+import { sha256 } from '@noble/hashes/sha256';
 
-// Export programID từ biến môi trường thay vì hardcode
-export const programID = new PublicKey(process.env.REACT_APP_PROGRAM_ID || '5tFJskbgqrPxb992SUf6JzcQWJGbJuvsta2pRnZBcygN');
+// Sử dụng PROGRAM_ID từ constants
+export const programID = PROGRAM_ID;
 
 // Hằng số cho chương trình secp256r1
 export const SECP256R1_PROGRAM_ID = new PublicKey('Secp256r1SigVerify1111111111111111111111111');
@@ -14,14 +17,13 @@ export const SECP256R1_PROGRAM_ID = new PublicKey('Secp256r1SigVerify11111111111
 export const SYSVAR_INSTRUCTIONS_PUBKEY = new PublicKey('Sysvar1nstructions1111111111111111111111111');
 export const SYSVAR_CLOCK_PUBKEY = new PublicKey('SysvarC1ock11111111111111111111111111111111');
 
-// Sửa lỗi type cho IDL
 const idl: any = idlFile;
 
-// Cập nhật: Chương trình secp256r1 là một chương trình native của Solana, 
-// nên không thể kiểm tra bằng getAccountInfo
+// Thêm hằng số cho chuẩn hóa signature
+const SECP256R1_ORDER = new BN('FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551', 16);
+const SECP256R1_HALF_ORDER = SECP256R1_ORDER.shrn(1);
+
 export const checkSecp256r1Program = async (): Promise<boolean> => {
-  // Chương trình native luôn tồn tại trên validator chính thức
-  // Chỉ cần đảm bảo validator được khởi động với tham số phù hợp
   return true;
 };
 
@@ -476,8 +478,33 @@ export const createSecp256r1Instruction = (
 };
 
 /**
- * Tạo transaction để chuyển tiền
- * @param multisigPDA PDA của ví multisig
+ * Chuẩn hóa chữ ký về dạng Low-S
+ * @param signature - Chữ ký raw (đã chuyển từ DER sang raw format)
+ * @returns Chữ ký đã chuẩn hóa
+ */
+export const normalizeSignatureToLowS = (signature: Buffer): Buffer => {
+  // Phân tách r và s từ signature (mỗi cái 32 bytes)
+  const r = signature.slice(0, 32);
+  const s = signature.slice(32, 64);
+  
+  // Chuyển s thành BN để so sánh với HALF_ORDER
+  const sBN = new BN(s);
+  
+  // Kiểm tra nếu s > half_order
+  if (sBN.gt(SECP256R1_HALF_ORDER)) {
+    console.log("Chuẩn hóa signature về dạng Low-S");
+    // Tính s' = order - s
+    const sNormalized = SECP256R1_ORDER.sub(sBN);
+    const sNormalizedBuffer = sNormalized.toArrayLike(Buffer, 'be', 32);
+    return Buffer.concat([r, sNormalizedBuffer]);
+  }
+  
+  console.log("Signature đã ở dạng Low-S");
+  return signature;
+};
+
+/**
+ * @param multisigPDA 
  * @param guardianPDA PDA của guardian
  * @param destination Địa chỉ đích để chuyển token
  * @param amountLamports Số lượng lamports để chuyển
@@ -705,4 +732,314 @@ export const verifySecp256r1Signature = async (
     console.error("❌ XÁC MINH CHỮ KÝ SECP256R1 THẤT BẠI:", error);
     throw new Error(`Lỗi khi xác minh chữ ký secp256r1: ${error.message}`);
   }
+};
+
+/**
+ * Chuyển đổi chữ ký từ định dạng DER sang định dạng raw (r, s) cho Secp256r1
+ * 
+ * @param derSignature Chữ ký ở định dạng DER từ WebAuthn
+ * @returns Chữ ký ở định dạng raw 64 bytes (32 bytes r + 32 bytes s)
+ */
+export const derToRaw = (derSignature: Uint8Array): Uint8Array => {
+  try {
+    // Kiểm tra format DER
+    if (derSignature[0] !== 0x30) {
+      throw new Error('Chữ ký không đúng định dạng DER: byte đầu tiên không phải 0x30');
+    }
+    
+    // DER format: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
+    const rLength = derSignature[3];
+    const rStart = 4;
+    const rEnd = rStart + rLength;
+    
+    const sLength = derSignature[rEnd + 1];
+    const sStart = rEnd + 2;
+    const sEnd = sStart + sLength;
+    
+    // Trích xuất r và s
+    let r = derSignature.slice(rStart, rEnd);
+    let s = derSignature.slice(sStart, sEnd);
+    
+    console.log('DER r length:', r.length, 'r (hex):', Buffer.from(r).toString('hex'));
+    console.log('DER s length:', s.length, 's (hex):', Buffer.from(s).toString('hex'));
+    
+    // Xử lý trường hợp r có 33 bytes với byte đầu tiên là 0x00
+    if (r.length === 33 && r[0] === 0x00) {
+      console.log('Phát hiện r dài 33 bytes với byte đầu 0x00, loại bỏ byte này');
+      r = r.slice(1);
+    }
+    
+    // Xử lý trường hợp s có 33 bytes với byte đầu tiên là 0x00
+    if (s.length === 33 && s[0] === 0x00) {
+      console.log('Phát hiện s dài 33 bytes với byte đầu 0x00, loại bỏ byte này');
+      s = s.slice(1);
+    }
+    
+    // Chuẩn bị r và s cho định dạng raw (mỗi phần 32 bytes)
+    const rPadded = new Uint8Array(32);
+    const sPadded = new Uint8Array(32);
+    
+    if (r.length <= 32) {
+      // Trường hợp r ngắn hơn 32 bytes, thêm padding
+      rPadded.set(r, 32 - r.length);
+    } else {
+      // Trường hợp r dài hơn 32 bytes, lấy 32 bytes cuối
+      rPadded.set(r.slice(r.length - 32));
+    }
+    
+    if (s.length <= 32) {
+      // Trường hợp s ngắn hơn 32 bytes, thêm padding
+      sPadded.set(s, 32 - s.length);
+    } else {
+      // Trường hợp s dài hơn 32 bytes, lấy 32 bytes cuối
+      sPadded.set(s.slice(s.length - 32));
+    }
+    
+    // Nối r và s lại
+    const rawSignature = new Uint8Array(64);
+    rawSignature.set(rPadded);
+    rawSignature.set(sPadded, 32);
+    
+    console.log('Raw signature (r||s):', Buffer.from(rawSignature).toString('hex'));
+    console.log('Raw signature length:', rawSignature.length);
+    
+    return rawSignature;
+  } catch (e) {
+    console.error('Lỗi khi chuyển đổi DER sang raw:', e);
+    throw e;
+  }
+};
+
+/**
+ * Tạo transaction để phê duyệt một đề xuất giao dịch
+ *
+ * @param proposalPDA Địa chỉ của đề xuất cần phê duyệt
+ * @param multisigPDA Địa chỉ ví multisig
+ * @param guardianPDA PDA của guardian
+ * @param guardianId ID của guardian
+ * @param payer Người trả phí
+ * @param webauthnSignature Chữ ký WebAuthn
+ * @param authenticatorData Dữ liệu xác thực từ WebAuthn
+ * @param clientDataJSON Dữ liệu client từ WebAuthn
+ * @returns Giao dịch đã được tạo
+ */
+export const createApproveProposalTx = async (
+  proposalPDA: PublicKey,
+  multisigPDA: PublicKey,
+  guardianPDA: PublicKey,
+  guardianId: number, // Thêm tham số guardianId
+  payer: PublicKey,
+  webauthnSignature: Uint8Array,
+  authenticatorData: Uint8Array,
+  clientDataJSON: Uint8Array,
+  proposalId: string | number, // Thêm proposalId
+  timestamp: number // Thêm timestamp
+): Promise<Transaction> => {
+  // Tạo transaction mới
+  const transaction = new Transaction();
+
+  // Lấy WebAuthn public key từ credential
+  console.log("Đang tìm WebAuthn public key...");
+  const webAuthnPubKey = await getWebAuthnPublicKey(guardianPDA);
+  
+  if (!webAuthnPubKey) {
+    throw new Error("Không tìm thấy WebAuthn public key cho guardian này");
+  }
+  
+  console.log("==== DEBUG WEBAUTHN PUBLIC KEY IN TRANSACTION ====");
+  console.log("WebAuthn Public Key (Hex):", webAuthnPubKey.toString('hex'));
+  console.log("WebAuthn Public Key length:", webAuthnPubKey.length);
+  console.log("WebAuthn Public Key bytes:", Array.from(webAuthnPubKey));
+  console.log("===============================================");
+  
+  // Tính hash của WebAuthn public key sử dụng hàm sha256
+  const hashBytes = sha256(webAuthnPubKey);
+  // Lấy 6 bytes đầu tiên
+  const pubkeyHashBytes = hashBytes.slice(0, 6);
+  // Chuyển đổi sang hex string
+  const pubkeyHashHex = Array.from(pubkeyHashBytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  // 1. Tạo message để ký
+  const messageString = `approve:proposal_${proposalId},guardian_${guardianId},timestamp:${timestamp},pubkey:${pubkeyHashHex}`;
+  const messageBuffer = Buffer.from(messageString);
+  console.log("Thông điệp được ký:", messageString);
+
+  // 2. Tính hash của clientDataJSON
+  const clientDataHash = await crypto.subtle.digest('SHA-256', clientDataJSON);
+  const clientDataHashBytes = new Uint8Array(clientDataHash);
+
+  // 3. Tạo verification data: authenticatorData + hash(clientDataJSON)
+  const verificationData = new Uint8Array(authenticatorData.length + clientDataHashBytes.length);
+  verificationData.set(new Uint8Array(authenticatorData), 0);
+  verificationData.set(clientDataHashBytes, authenticatorData.length);
+
+  // 4. Chuyển đổi signature từ DER sang raw format
+  const rawSignature = derToRaw(webauthnSignature);
+  
+  // 5. Chuẩn hóa signature về dạng Low-S
+  const normalizedSignature = normalizeSignatureToLowS(Buffer.from(rawSignature));
+  
+  // 6. Tạo instruction Secp256r1 để xác thực chữ ký
+  const secp256r1Ix = createSecp256r1Instruction(
+    Buffer.from(verificationData),
+    webAuthnPubKey,
+    normalizedSignature,
+    false
+  );
+  
+  // Thêm secp256r1 instruction vào transaction
+  transaction.add(secp256r1Ix);
+  
+  // 7. Tạo instruction approve_proposal
+  
+  // Tạo dữ liệu cho approve_proposal instruction
+  const approveProposalDiscriminator = Buffer.from([136, 108, 102, 85, 98, 114, 7, 147]); // Discriminator từ IDL
+  
+  // Tạo các buffer cho tham số
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId), 0);
+  
+  const guardianIdBuffer = Buffer.alloc(8);
+  guardianIdBuffer.writeBigUInt64LE(BigInt(guardianId), 0);
+  
+  const timestampBuffer = Buffer.alloc(8);
+  timestampBuffer.writeBigInt64LE(BigInt(timestamp), 0);
+  
+  // Tạo message buffer và độ dài
+  const messageLenBuffer = Buffer.alloc(4);
+  messageLenBuffer.writeUInt32LE(messageBuffer.length, 0);
+  
+  // Tạo dữ liệu instruction
+  const approveData = Buffer.concat([
+    approveProposalDiscriminator,
+    proposalIdBuffer,
+    guardianIdBuffer,
+    timestampBuffer,
+    messageLenBuffer,
+    messageBuffer
+  ]);
+  
+  // 8. Tạo danh sách account cần thiết
+  const approveIx = new TransactionInstruction({
+    keys: [
+      { pubkey: multisigPDA, isSigner: false, isWritable: true }, // Thay đổi isWritable thành true
+      { pubkey: proposalPDA, isSigner: false, isWritable: true },
+      // Danh sách tài khoản signature sẽ được tạo PDA từ proposal và guardianId
+      { pubkey: await findSignaturePDA(proposalPDA, guardianId), isSigner: false, isWritable: true },
+      { pubkey: guardianPDA, isSigner: false, isWritable: false },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PROGRAM_ID,
+    data: approveData
+  });
+  
+  // Thêm approve instruction vào transaction
+  transaction.add(approveIx);
+  
+  return transaction;
+};
+
+/**
+ * Hàm hỗ trợ để tìm PDA cho signature từ proposal và guardianId
+ */
+async function findSignaturePDA(proposalPDA: PublicKey, guardianId: number): Promise<PublicKey> {
+  const [pda] = await PublicKey.findProgramAddress(
+    [
+      Buffer.from("signature"),
+      proposalPDA.toBuffer(),
+      new BN(guardianId).toArrayLike(Buffer, "le", 8)
+    ],
+    PROGRAM_ID
+  );
+  return pda;
+}
+
+/**
+ * Hàm hỗ trợ để lấy WebAuthn public key cho guardian
+ */
+async function getWebAuthnPublicKey(guardianPDA: PublicKey): Promise<Buffer> {
+  console.log("Tìm WebAuthn public key cho guardian:", guardianPDA.toString());
+  
+  // Giả lập việc lấy từ localStorage hoặc cache
+  const publicKeyHex = localStorage.getItem("guardianPublicKey");
+  if (publicKeyHex) {
+    console.log("Đã tìm thấy public key trong localStorage:", publicKeyHex.slice(0, 10) + "...");
+    const pubKeyBuffer = Buffer.from(publicKeyHex, 'hex');
+    console.log("Độ dài public key:", pubKeyBuffer.length);
+    return pubKeyBuffer;
+  }
+  
+  // Trong thực tế, bạn có thể cần truy vấn dữ liệu này từ blockchain hoặc Firebase
+  throw new Error("Không tìm thấy WebAuthn public key, hãy đăng nhập trước");
+}
+
+/**
+ * Tạo transaction để thực thi một đề xuất giao dịch đã được phê duyệt
+ * 
+ * @param proposalPDA Địa chỉ PDA của đề xuất
+ * @param multisigPDA Địa chỉ PDA của multisig
+ * @param feePayer Người trả phí giao dịch
+ * @param destination Địa chỉ đích để chuyển tiền (nếu là giao dịch chuyển tiền)
+ * @returns Transaction đã được tạo
+ */
+export const createExecuteProposalTx = async (
+  proposalPDA: PublicKey,
+  multisigPDA: PublicKey,
+  feePayer: PublicKey,
+  destination?: PublicKey
+): Promise<Transaction> => {
+  const transaction = new Transaction();
+  
+  // Tạo discriminator cho execute_proposal
+  const executeProposalDiscriminator = Buffer.from([186, 60, 116, 133, 108, 128, 111, 28]); // Discriminator chính xác từ IDL
+  
+  console.log('Execute Proposal Discriminator (hex) từ createExecuteProposalTx:', Buffer.from(executeProposalDiscriminator).toString('hex'));
+  
+  // Tạo dữ liệu cho proposal_id
+  const proposalIdMatch = proposalPDA.toString().match(/proposal-(\d+)/);
+  const proposalId = proposalIdMatch ? parseInt(proposalIdMatch[1]) : 1; // Lấy ID từ tên PDA hoặc mặc định là 1
+  
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId), 0);
+  
+  // Tạo dữ liệu instruction
+  const executeData = Buffer.concat([
+    executeProposalDiscriminator,
+    proposalIdBuffer,
+  ]);
+  
+  // Tạo danh sách account cần thiết
+  const accounts = [
+    { pubkey: multisigPDA, isSigner: false, isWritable: true },
+    { pubkey: proposalPDA, isSigner: false, isWritable: true },
+    { pubkey: feePayer, isSigner: true, isWritable: true },
+  ];
+  
+  // Thêm destination nếu được cung cấp
+  if (destination) {
+    accounts.push({ pubkey: destination, isSigner: false, isWritable: true });
+  }
+  
+  // Thêm các account hệ thống
+  accounts.push(
+    { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+  );
+  
+  // Tạo instruction
+  const executeIx = new TransactionInstruction({
+    keys: accounts,
+    programId: PROGRAM_ID,
+    data: executeData
+  });
+  
+  // Thêm instruction vào transaction
+  transaction.add(executeIx);
+  
+  return transaction;
 };

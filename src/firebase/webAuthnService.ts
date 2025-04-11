@@ -30,6 +30,7 @@ export interface WebAuthnCredentialMapping {
   guardianName?: string; // Tên của guardian (nếu có)
   createdAt: string; // Thời gian tạo
   lastUsed?: string; // Thời gian sử dụng cuối cùng
+  threshold?: number; // Ngưỡng ký của ví đa chữ ký
 }
 
 /**
@@ -39,6 +40,7 @@ export interface WebAuthnCredentialMapping {
  * @param guardianPublicKey Khóa công khai WebAuthn của guardian dưới dạng mảng số
  * @param guardianId ID của guardian
  * @param guardianName Tên của guardian (nếu có)
+ * @param threshold Ngưỡng ký của ví đa chữ ký
  * @returns Trả về true nếu lưu thành công
  */
 export const saveWebAuthnCredentialMapping = async (
@@ -46,7 +48,8 @@ export const saveWebAuthnCredentialMapping = async (
   walletAddress: string,
   guardianPublicKey: number[],
   guardianId: number,
-  guardianName?: string
+  guardianName?: string,
+  threshold?: number
 ): Promise<boolean> => {
   try {
     // Chuẩn hóa credential ID
@@ -61,6 +64,7 @@ export const saveWebAuthnCredentialMapping = async (
       guardianPublicKey,
       guardianId,
       guardianName,
+      threshold,
       createdAt: new Date().toISOString(),
       lastUsed: new Date().toISOString()
     });

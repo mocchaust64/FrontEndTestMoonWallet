@@ -76,6 +76,175 @@
       ]
     },
     {
+      "name": "approve_proposal",
+      "discriminator": [
+        136,
+        108,
+        102,
+        85,
+        98,
+        114,
+        7,
+        147
+      ],
+      "accounts": [
+        {
+          "name": "multisig",
+          "writable": true
+        },
+        {
+          "name": "proposal",
+          "writable": true
+        },
+        {
+          "name": "signature",
+          "writable": true
+        },
+        {
+          "name": "guardian"
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "instruction_sysvar"
+        },
+        {
+          "name": "clock"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "proposal_id",
+          "type": "u64"
+        },
+        {
+          "name": "guardian_id",
+          "type": "u64"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        },
+        {
+          "name": "message",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "create_proposal",
+      "discriminator": [
+        132,
+        116,
+        68,
+        174,
+        216,
+        160,
+        198,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "multisig",
+          "writable": true
+        },
+        {
+          "name": "proposal",
+          "writable": true
+        },
+        {
+          "name": "proposer_guardian"
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "clock"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "proposal_id",
+          "type": "u64"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "proposer_guardian_id",
+          "type": "u64"
+        },
+        {
+          "name": "action",
+          "type": "string"
+        },
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "ActionParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "execute_proposal",
+      "discriminator": [
+        186,
+        60,
+        116,
+        133,
+        108,
+        128,
+        111,
+        28
+      ],
+      "accounts": [
+        {
+          "name": "multisig",
+          "writable": true
+        },
+        {
+          "name": "proposal",
+          "writable": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "clock"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "proposal_id",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "initialize_multisig",
       "discriminator": [
         220,
@@ -173,6 +342,61 @@
               33
             ]
           }
+        }
+      ]
+    },
+    {
+      "name": "reject_proposal",
+      "discriminator": [
+        114,
+        162,
+        164,
+        82,
+        191,
+        11,
+        102,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "multisig",
+          "writable": true
+        },
+        {
+          "name": "proposal",
+          "writable": true
+        },
+        {
+          "name": "guardian"
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "instruction_sysvar"
+        },
+        {
+          "name": "clock"
+        }
+      ],
+      "args": [
+        {
+          "name": "proposal_id",
+          "type": "u64"
+        },
+        {
+          "name": "guardian_id",
+          "type": "u64"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        },
+        {
+          "name": "message",
+          "type": "bytes"
         }
       ]
     },
@@ -292,10 +516,7 @@
           "writable": true
         },
         {
-          "name": "guardian",
-          "docs": [
-            "Tìm guardian owner có webauthn_pubkey mà chúng ta cần xác thực"
-          ]
+          "name": "guardian"
         },
         {
           "name": "clock"
@@ -369,6 +590,32 @@
         77,
         189,
         238
+      ]
+    },
+    {
+      "name": "ProposalSignature",
+      "discriminator": [
+        206,
+        136,
+        120,
+        195,
+        80,
+        13,
+        39,
+        74
+      ]
+    },
+    {
+      "name": "TransactionProposal",
+      "discriminator": [
+        39,
+        205,
+        202,
+        42,
+        47,
+        200,
+        144,
+        95
       ]
     }
   ],
@@ -497,6 +744,16 @@
       "code": 6024,
       "name": "InsufficientFunds",
       "msg": "Không đủ SOL trong tài khoản"
+    },
+    {
+      "code": 6025,
+      "name": "MultisigMismatch",
+      "msg": "Địa chỉ ví multisig không khớp với đề xuất"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidOwner",
+      "msg": "Chủ sở hữu tài khoản không hợp lệ"
     }
   ],
   "types": [
@@ -614,6 +871,116 @@
           {
             "name": "credential_id",
             "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProposalSignature",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "proposal",
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian_id",
+            "type": "u64"
+          },
+          {
+            "name": "signature_time",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProposalStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Pending"
+          },
+          {
+            "name": "Executed"
+          },
+          {
+            "name": "Rejected"
+          },
+          {
+            "name": "Expired"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TransactionProposal",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "multisig",
+            "type": "pubkey"
+          },
+          {
+            "name": "proposal_id",
+            "type": "u64"
+          },
+          {
+            "name": "proposer",
+            "type": "pubkey"
+          },
+          {
+            "name": "description",
+            "type": "string"
+          },
+          {
+            "name": "action",
+            "type": "string"
+          },
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "ActionParams"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "ProposalStatus"
+              }
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "executed_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "signatures_count",
+            "type": "u8"
+          },
+          {
+            "name": "required_signatures",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

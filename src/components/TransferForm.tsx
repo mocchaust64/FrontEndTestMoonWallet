@@ -7,7 +7,10 @@ import {
   createTransferTx, 
   createSecp256r1Instruction,
   programID,
-  SECP256R1_PROGRAM_ID
+  SECP256R1_PROGRAM_ID,
+  checkSecp256r1Program,
+  verifySecp256r1Signature,
+  derToRaw
 } from '../utils/transactionUtils';
 import { getWebAuthnAssertion } from '../utils/webauthnUtils';
 import { getGuardianPDA, getMultisigPDA } from '../utils/credentialUtils';
@@ -49,62 +52,6 @@ const normalizeSignatureToLowS = (sig: Buffer): Buffer => {
   
   console.log("Signature đã ở dạng Low-S");
   return sig;
-};
-
-// Hàm chuyển đổi chữ ký DER sang raw (r, s) format
-const convertDERtoRaw = (derSignature: Uint8Array): Uint8Array => {
-  // Đảm bảo đây là DER signature
-  if (derSignature[0] !== 0x30) {
-    console.error('Chữ ký không phải định dạng DER');
-    return new Uint8Array(64); // Trả về buffer rỗng nếu không đúng định dạng
-  }
-  
-  // Parse DER format
-  // Format: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
-  const rLength = derSignature[3];
-  const rStart = 4;
-  const rEnd = rStart + rLength;
-  
-  const sLength = derSignature[rEnd + 1];
-  const sStart = rEnd + 2;
-  const sEnd = sStart + sLength;
-  
-  // Trích xuất r và s
-  let r = derSignature.slice(rStart, rEnd);
-  let s = derSignature.slice(sStart, sEnd);
-  
-  // Cần đảm bảo r và s đúng 32 bytes
-  // - Nếu dài hơn 32 bytes, cắt bớt (thường r và s có thể có padding)
-  // - Nếu ngắn hơn 32 bytes, thêm padding 0 vào đầu
-  const rPadded = new Uint8Array(32);
-  const sPadded = new Uint8Array(32);
-  
-  if (r.length <= 32) {
-    // Trường hợp r ngắn hơn 32 bytes, thêm padding
-    rPadded.set(r, 32 - r.length);
-  } else {
-    // Trường hợp r dài hơn 32 bytes, cắt bớt (thường là byte đầu tiên là 0)
-    rPadded.set(r.slice(r.length - 32));
-  }
-  
-  if (s.length <= 32) {
-    // Trường hợp s ngắn hơn 32 bytes, thêm padding
-    sPadded.set(s, 32 - s.length);
-  } else {
-    // Trường hợp s dài hơn 32 bytes, cắt bớt (thường là byte đầu tiên là 0)
-    sPadded.set(s.slice(s.length - 32));
-  }
-  
-  // Nối r và s lại
-  const rawSignature = new Uint8Array(64);
-  rawSignature.set(rPadded);
-  rawSignature.set(sPadded, 32);
-  
-  console.log('Đã chuyển đổi signature từ DER sang raw format:');
-  console.log('- DER length:', derSignature.length);
-  console.log('- Raw length:', rawSignature.length);
-  
-  return rawSignature;
 };
 
 // Interface cho props của component
@@ -486,7 +433,15 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       }
       
       // Tính toán hash của WebAuthn public key - thực hiện đúng như trong contract
+      console.log('===== DEBUG TRANSFER FORM HASH CALCULATION =====');
       console.log('WebAuthn Public Key (Hex):', Buffer.from(webAuthnPubKey).toString('hex'));
+      console.log('WebAuthn Public Key Type:', webAuthnPubKey.constructor.name);
+      console.log('WebAuthn Public Key Length:', webAuthnPubKey.length);
+      
+      // Log thông tin chi tiết về việc gọi hàm hash
+      console.log('Hash Function Input (exact param):', Buffer.from(webAuthnPubKey).toString('hex'));
+      console.log('Hash Function Input Type:', Buffer.from(webAuthnPubKey).constructor.name);
+      console.log('Hash Function Input Bytes:', Array.from(Buffer.from(webAuthnPubKey)));
       
       // Tính hash sử dụng sha256 giống contract
       const hashBytes = sha256(Buffer.from(webAuthnPubKey));
@@ -501,7 +456,8 @@ export const TransferForm: React.FC<TransferFormProps> = ({
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
       
-      console.log('First 6 bytes of Hash (12 hex chars):', pubkeyHashHex);
+      console.log('TRANSFER: First 6 bytes of Hash (12 hex chars):', pubkeyHashHex);
+      console.log('==============================================');
       
       // Thử thêm log để debug từng byte
       console.log('Hash bytes (first 6):', Array.from(hashBytesStart));
@@ -599,62 +555,7 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       
       setSuccess(''); // Xóa thông báo thành công tạm thời
       
-      // Chuyển đổi signature từ DER sang raw format (r, s)
-      const derToRaw = (derSignature: Uint8Array): Uint8Array => {
-        try {
-          // Kiểm tra format DER
-          if (derSignature[0] !== 0x30) {
-            throw new Error('Chữ ký không đúng định dạng DER: byte đầu tiên không phải 0x30');
-          }
-          
-          // DER format: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
-          const rLength = derSignature[3];
-          const rStart = 4;
-          const rEnd = rStart + rLength;
-          
-          const sLength = derSignature[rEnd + 1];
-          const sStart = rEnd + 2;
-          const sEnd = sStart + sLength;
-          
-          // Trích xuất r và s
-          let r = derSignature.slice(rStart, rEnd);
-          let s = derSignature.slice(sStart, sEnd);
-          
-          console.log('DER r length:', r.length, 'r (hex):', Buffer.from(r).toString('hex'));
-          console.log('DER s length:', s.length, 's (hex):', Buffer.from(s).toString('hex'));
-          
-          // Chuẩn bị r và s cho định dạng raw (mỗi phần 32 bytes)
-          const rPadded = new Uint8Array(32);
-          const sPadded = new Uint8Array(32);
-          
-          if (r.length <= 32) {
-            // Trường hợp r ngắn hơn 32 bytes, thêm padding
-            rPadded.set(r, 32 - r.length);
-                    } else {
-            // Trường hợp r dài hơn 32 bytes (thường là có byte 0x00 ở đầu), lấy 32 bytes cuối
-            rPadded.set(r.slice(r.length - 32));
-          }
-          
-          if (s.length <= 32) {
-            // Trường hợp s ngắn hơn 32 bytes, thêm padding
-            sPadded.set(s, 32 - s.length);
-                } else {
-            // Trường hợp s dài hơn 32 bytes, lấy 32 bytes cuối
-            sPadded.set(s.slice(s.length - 32));
-          }
-          
-          // Nối r và s lại
-          const rawSignature = new Uint8Array(64);
-          rawSignature.set(rPadded);
-          rawSignature.set(sPadded, 32);
-          
-          return rawSignature;
-        } catch (e) {
-          console.error('Lỗi khi chuyển đổi DER sang raw:', e);
-          throw e;
-        }
-      };
-      
+      // Chuyển đổi signature từ DER sang raw format (r, s) sử dụng hàm từ transactionUtils
       const rawSignature = derToRaw(assertion.signature);
       const signature = Buffer.from(rawSignature);
       
@@ -741,10 +642,10 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       
         try {
         console.log('Sending transaction with secp256r1 instruction...');
-        console.log('Skip preflight:', true);
+        console.log('Skip preflight:', false);
         
           const transactionId = await connection.sendRawTransaction(transferTx.serialize(), {
-            skipPreflight: true, // Bỏ qua preflight để tránh lỗi với instruction phức tạp
+            skipPreflight: false, // Bỏ qua preflight để tránh lỗi với instruction phức tạp
             preflightCommitment: 'confirmed'
           });
           
@@ -881,61 +782,7 @@ export const TransferForm: React.FC<TransferFormProps> = ({
       
       const clientDataObj = JSON.parse(new TextDecoder().decode(assertion.clientDataJSON));
      
-      const derToRaw = (derSignature: Uint8Array): Uint8Array => {
-        try {
-          // Kiểm tra format DER
-          if (derSignature[0] !== 0x30) {
-            throw new Error('Chữ ký không đúng định dạng DER: byte đầu tiên không phải 0x30');
-          }
-          
-          // DER format: 0x30 [total-length] 0x02 [r-length] [r] 0x02 [s-length] [s]
-          const rLength = derSignature[3];
-          const rStart = 4;
-          const rEnd = rStart + rLength;
-          
-          const sLength = derSignature[rEnd + 1];
-          const sStart = rEnd + 2;
-          const sEnd = sStart + sLength;
-          
-          // Trích xuất r và s
-          let r = derSignature.slice(rStart, rEnd);
-          let s = derSignature.slice(sStart, sEnd);
-          
-          console.log('DER r length:', r.length, 'r (hex):', Buffer.from(r).toString('hex'));
-          console.log('DER s length:', s.length, 's (hex):', Buffer.from(s).toString('hex'));
-          
-          // Chuẩn bị r và s cho định dạng raw (mỗi phần 32 bytes)
-          const rPadded = new Uint8Array(32);
-          const sPadded = new Uint8Array(32);
-          
-          if (r.length <= 32) {
-            // Trường hợp r ngắn hơn 32 bytes, thêm padding
-            rPadded.set(r, 32 - r.length);
-          } else {
-            // Trường hợp r dài hơn 32 bytes (thường là có byte 0x00 ở đầu), lấy 32 bytes cuối
-            rPadded.set(r.slice(r.length - 32));
-          }
-          
-          if (s.length <= 32) {
-            // Trường hợp s ngắn hơn 32 bytes, thêm padding
-            sPadded.set(s, 32 - s.length);
-          } else {
-            // Trường hợp s dài hơn 32 bytes, lấy 32 bytes cuối
-            sPadded.set(s.slice(s.length - 32));
-          }
-          
-          // Nối r và s lại
-          const rawSignature = new Uint8Array(64);
-          rawSignature.set(rPadded);
-          rawSignature.set(sPadded, 32);
-          
-          return rawSignature;
-        } catch (e) {
-          console.error('Lỗi khi chuyển đổi DER sang raw:', e);
-          throw e;
-        }
-      };
-      
+      // Chuyển đổi signature từ DER sang raw format (r, s)
       const rawSignature = derToRaw(assertion.signature);
       const signature = Buffer.from(rawSignature);
       
