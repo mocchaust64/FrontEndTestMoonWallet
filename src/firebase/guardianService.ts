@@ -15,6 +15,7 @@ export interface GuardianData {
   webauthnCredentialId: string;
   webauthnPublicKey: number[]; // Lưu khóa công khai dưới dạng mảng số
   status: 'pending' | 'ready' | 'completed'; // Trạng thái guardian
+  threshold: number; // Thêm trường threshold cho ví multisig
   createdAt: Timestamp;
   completedAt?: Timestamp;
   txSignature?: string; // Chữ ký giao dịch khi hoàn tất
@@ -29,6 +30,7 @@ export interface InviteData {
   status: 'pending' | 'ready' | 'completed';
   createdAt: Timestamp;
   guardianName?: string;
+  threshold?: number; // Số lượng chữ ký cần thiết cho ví multisig
 }
 
 // Lưu thông tin invitation khi tạo mã mời

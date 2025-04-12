@@ -34,8 +34,8 @@ export interface WebAuthnCredentialMapping {
 }
 
 /**
- * Lưu ánh xạ giữa WebAuthn credential và địa chỉ ví
- * @param credentialId ID của credential WebAuthn (có thể là hex hoặc base64)
+ * Lưu ánh xạ giữa WebAuthn credential ID và thông tin guardian
+ * @param credentialId ID của credential WebAuthn
  * @param walletAddress Địa chỉ ví multisig
  * @param guardianPublicKey Khóa công khai WebAuthn của guardian dưới dạng mảng số
  * @param guardianId ID của guardian
@@ -56,18 +56,33 @@ export const saveWebAuthnCredentialMapping = async (
     const normalizedId = normalizeCredentialId(credentialId);
     const base64Id = Buffer.from(normalizedId, 'hex').toString('base64');
 
-    // Tạo một document dưới collection webauthn_credentials
-    await setDoc(doc(db, "webauthn_credentials", normalizedId), {
+    // Tạo dữ liệu cơ bản
+    const credentialData: any = {
       credentialId: normalizedId,
       credentialIdBase64: base64Id,
       walletAddress,
       guardianPublicKey,
       guardianId,
-      guardianName,
-      threshold,
       createdAt: new Date().toISOString(),
       lastUsed: new Date().toISOString()
-    });
+    };
+    
+    // Thêm guardianName nếu có
+    if (guardianName) {
+      credentialData.guardianName = guardianName;
+    }
+    
+    // Kiểm tra và thêm threshold, báo lỗi nếu không tồn tại
+    if (threshold === undefined || threshold === null) {
+      console.error("Threshold là bắt buộc! Không thể lưu credential mapping.");
+      throw new Error("Threshold không được xác định! Không thể lưu credential mapping.");
+    } else {
+      console.log(`Lưu threshold vào WebAuthn credential mapping: ${threshold}`);
+      credentialData.threshold = threshold;
+    }
+
+    // Tạo một document dưới collection webauthn_credentials
+    await setDoc(doc(db, "webauthn_credentials", normalizedId), credentialData);
 
     console.log('Đã lưu ánh xạ WebAuthn credential thành công');
     return true;
@@ -177,6 +192,61 @@ export const updateCredentialLastUsed = async (
     return true;
   } catch (error) {
     console.error('Lỗi khi cập nhật thời gian sử dụng credential:', error);
+    return false;
+  }
+};
+
+/**
+ * Cập nhật ngưỡng ký (threshold) của ví đa chữ ký
+ * @param credentialId ID của credential WebAuthn
+ * @param walletAddress Địa chỉ ví multisig
+ * @param threshold Ngưỡng ký mới
+ * @returns Trả về true nếu cập nhật thành công
+ */
+export const updateWalletThreshold = async (
+  credentialId: string,
+  walletAddress: string,
+  threshold: number
+): Promise<boolean> => {
+  try {
+    // Chuẩn hóa credential ID
+    const normalizedId = normalizeCredentialId(credentialId);
+    
+    // Kiểm tra xem credential có tồn tại không
+    const docRef = doc(db, "webauthn_credentials", normalizedId);
+    const docSnap = await getDoc(docRef);
+    
+    if (docSnap.exists()) {
+      // Cập nhật nếu tồn tại
+      await updateDoc(docRef, {
+        threshold,
+        walletAddress
+      });
+      console.log(`Đã cập nhật ngưỡng ký thành ${threshold} cho ví ${walletAddress}`);
+      return true;
+    } else {
+      // Thử tìm với credentialId trong queries
+      const q = query(
+        collection(db, "webauthn_credentials"),
+        where("credentialId", "==", normalizedId)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        const docRef = querySnapshot.docs[0].ref;
+        await updateDoc(docRef, {
+          threshold,
+          walletAddress
+        });
+        console.log(`Đã cập nhật ngưỡng ký thành ${threshold} cho ví ${walletAddress}`);
+        return true;
+      }
+      
+      console.warn('Không tìm thấy credential ID trong Firebase, không thể cập nhật threshold');
+      return false;
+    }
+  } catch (error) {
+    console.error('Lỗi khi cập nhật ngưỡng ký cho ví:', error);
     return false;
   }
 }; 

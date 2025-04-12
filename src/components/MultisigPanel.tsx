@@ -22,7 +22,7 @@ import { TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_ID } from '../utils/constants';
 import {  Timestamp} from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { createProposal, addSignerToProposal, updateProposalStatus } from '../firebase/proposalService';
+import { createProposal, addSignerToProposal, updateProposalStatus, getProposalsByWallet } from '../firebase/proposalService';
 import { sha256 } from '@noble/hashes/sha256';
 
 const SECP256R1_ORDER = new BN('FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551', 16);
@@ -388,13 +388,34 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
     initialize();
   }, [credentialId, connection, isUsingFirebase]);
   
+  // Thêm hàm loadProposalsFromFirebase để tải đề xuất từ Firebase
+  const loadProposalsFromFirebase = async (multisigPubkey: PublicKey) => {
+    try {
+      setStatus(prev => `${prev}\nĐang tải đề xuất từ Firebase...`);
+      // Sử dụng hàm getProposalsByWallet từ proposalService
+      const proposalsData = await getProposalsByWallet(multisigPubkey);
+      
+      if (proposalsData && Array.isArray(proposalsData)) {
+        setProposals(proposalsData);
+        setStatus(prev => `${prev}\nĐã tải ${proposalsData.length} đề xuất từ Firebase`);
+      } else {
+        setStatus(prev => `${prev}\nKhông tìm thấy đề xuất nào trong Firebase`);
+      }
+    } catch (error) {
+      console.error('Lỗi khi tải đề xuất từ Firebase:', error);
+      setStatus(prev => `${prev}\nLỗi khi tải đề xuất từ Firebase: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  
   // Tìm ví đa chữ ký
   const findWallet = async (credentialIdBase64: string, prog: Program | null) => {
     try {
       setIsLoading(true);
       setStatus('Đang tìm ví đa chữ ký...');
       
-      const result = await findMultisigWallet(credentialIdBase64, prog as any, {
+      const credentialIdHex = Buffer.from(credentialIdBase64, 'base64').toString('hex');
+      
+      let result = await findMultisigWallet(credentialIdBase64, prog as any, {
         onProgress: msg => setStatus(prev => `${prev}\n${msg}`),
         onError: err => setStatus(prev => `${prev}\nLỗi: ${err}`),
         onSuccess: data => {
@@ -423,6 +444,44 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
         }
       });
       
+      // Nếu không tìm thấy qua credential ID, thử tìm thông qua Firebase
+      if (!result && isUsingFirebase) {
+        setStatus(prev => `${prev}\nKhông tìm thấy ví qua credential ID, đang kiểm tra trong Firebase...`);
+        
+        // Lấy thông tin từ Firebase
+        const credentialMapping = await getWalletByCredentialId(credentialIdHex);
+        
+        if (credentialMapping && credentialMapping.walletAddress) {
+          const walletAddress = credentialMapping.walletAddress;
+          const multisigPubkey = new PublicKey(walletAddress);
+          
+          setMultisigAddress(multisigPubkey);
+          localStorage.setItem('multisigWalletAddress', walletAddress);
+          
+          setStatus(prev => `${prev}\nĐã tìm thấy ví đa chữ ký từ Firebase: ${walletAddress}`);
+          setShowMultisigPanel(true);
+          setShowTransferForm(true);
+          
+          if (credentialMapping.threshold !== undefined) {
+            setMultisigInfo({
+              pubkey: multisigPubkey,
+              account: null,
+              address: walletAddress,
+              threshold: credentialMapping.threshold
+            });
+          }
+          
+          // Tải đề xuất từ Firebase vì không có program
+          loadProposalsFromFirebase(multisigPubkey);
+          
+          result = {
+            pubkey: multisigPubkey,
+            account: null,
+            address: walletAddress
+          };
+        }
+      }
+      
       return result;
     } catch (error) {
       console.error('Lỗi khi tìm ví:', error);
@@ -438,6 +497,12 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
     try {
       setIsLoading(true);
       setStatus('Đang tải danh sách đề xuất...');
+      
+      // Nếu không có program nhưng đang sử dụng Firebase
+      if (!prog && isUsingFirebase) {
+        loadProposalsFromFirebase(multisigPubkey);
+        return;
+      }
       
       await loadProposals(multisigPubkey, {
         onProgress: msg => setStatus(prev => `${prev}\n${msg}`),
@@ -799,12 +864,17 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
               
               try {
                 // Sử dụng service để lưu đề xuất
+                console.log("Bắt đầu lưu proposal vào Firebase với dữ liệu:", proposalData);
                 const docId = await createProposal(proposalData);
                 console.log("Đã lưu proposal vào Firebase thành công, ID:", docId);
               } catch (firebaseError) {
-                console.error("Lỗi khi lưu proposal vào Firebase:", firebaseError);
-                // Không throw error ở đây vì transaction đã thành công
-                // Chỉ log lỗi để debug
+                console.error("Lỗi chi tiết khi lưu proposal vào Firebase:", firebaseError);
+                // Hiển thị thông tin lỗi cụ thể hơn
+                if (firebaseError instanceof Error) {
+                  console.error("Tên lỗi:", firebaseError.name);
+                  console.error("Message:", firebaseError.message);
+                  console.error("Stack:", firebaseError.stack);
+                }
               }
               
               setStatus(`Đã tạo đề xuất thành công! Signature: ${signature}`);
@@ -1352,60 +1422,6 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
                   </button>
                 </div>
               )}
-              
-              {proposals.length > 0 && (
-                <div style={{marginTop: '20px'}}>
-                  <h3>Danh Sách Đề Xuất</h3>
-                  {proposals.map((proposal, index) => (
-                    <div key={index} style={styles.proposalItem}>
-                      <div style={styles.proposalHeader}>
-                        <div style={styles.proposalTitle}>{proposal.description}</div>
-                        <div style={{
-                          ...styles.proposalStatus,
-                          ...getStatusStyle(proposal.status)
-                        }}>
-                          {proposal.status}
-                        </div>
-                      </div>
-                      
-                      <div style={styles.proposalDetails}>
-                        <p>ID: {proposal.id}</p>
-                        <p>Chữ ký: {proposal.signaturesCount}/{proposal.requiredSignatures}</p>
-                        <p>Tạo lúc: {proposal.createdAt}</p>
-                        <p>Địa chỉ nhận: {proposal.params.destination?.toString()}</p>
-                        <p>Số lượng: {proposal.params.amount ? proposal.params.amount / LAMPORTS_PER_SOL : 0} SOL</p>
-                      </div>
-                      
-                      {proposal.status === 'Pending' && (
-                        <div style={styles.proposalActions}>
-                          <button 
-                            style={{...styles.button, ...styles.approveButton}}
-                            onClick={() => handleApproveProposal(proposal.id, proposal.pubkey)}
-                          >
-                            Phê Duyệt
-                          </button>
-                          
-                          <button 
-                            style={{...styles.button, ...styles.rejectButton}}
-                            onClick={() => console.log('Từ chối đề xuất', proposal.id)}
-                          >
-                            Từ Chối
-                          </button>
-                          
-                          {proposal.signaturesCount >= proposal.requiredSignatures && (
-                            <button 
-                              style={{...styles.button, ...styles.executeButton}}
-                              onClick={() => handleExecuteProposal(proposal.id, proposal.pubkey)}
-                            >
-                              Thực Thi
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
             </>
           )}
         </>
@@ -1413,14 +1429,3 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
     </div>
   );
 };
-
-// Helper function để lấy style cho trạng thái đề xuất
-const getStatusStyle = (status: string) => {
-  switch(status) {
-    case 'Pending': return styles.statusPending;
-    case 'Executed': return styles.statusExecuted;
-    case 'Rejected': return styles.statusRejected;
-    case 'Expired': return styles.statusExpired;
-    default: return {};
-  }
-}; 

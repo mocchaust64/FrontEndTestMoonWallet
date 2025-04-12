@@ -1444,6 +1444,33 @@ function App() {
         return;
       }
       
+      // Lấy threshold từ guardian ID = 1 (owner) trong Firebase
+      console.log('Đang lấy thông tin threshold từ guardian chính...');
+      
+      let walletThreshold = 1; // Giá trị mặc định
+      try {
+        // Tìm threshold từ credential mapping của guardian ID = 1
+        const { getCredentialsByWallet } = await import('./firebase/webAuthnService');
+        const credentials = await getCredentialsByWallet(multisigAddress.toString());
+        
+        if (credentials && credentials.length > 0) {
+          // Tìm guardian với ID = 1 (owner/guardian chính)
+          const ownerGuardian = credentials.find(cred => cred.guardianId === 1);
+          
+          if (ownerGuardian && ownerGuardian.threshold !== undefined) {
+            walletThreshold = ownerGuardian.threshold;
+            console.log(`Đã lấy được threshold từ guardian chính: ${walletThreshold}`);
+          } else {
+            console.warn('Không tìm thấy threshold từ guardian chính, sử dụng threshold mặc định');
+          }
+        } else {
+          console.warn('Không tìm thấy credential nào cho ví này, sử dụng threshold mặc định');
+        }
+      } catch (error) {
+        console.error('Lỗi khi lấy threshold từ Firebase:', error);
+        // Vẫn tiếp tục với threshold mặc định
+      }
+      
       const existingIds = await getExistingGuardianIds();
       const newGuardianId = generateNewGuardianId(existingIds);
       const inviteCode = generateRandomCode(8);
@@ -1461,8 +1488,11 @@ function App() {
           inviteCode,
           status: 'pending',
           ownerId: projectFeePayerKeypair?.publicKey.toString() || '',
-          guardianName: `Guardian ${newGuardianId}` // Thêm tên guardian mặc định
+          guardianName: `Guardian ${newGuardianId}`, // Thêm tên guardian mặc định
+          threshold: walletThreshold // Thêm thông tin threshold từ guardian chính
         });
+        
+        console.log(`Đã lưu invitation với threshold=${walletThreshold}`);
       } catch (error) {
         console.error("Lỗi khi lưu vào Firebase:", error)
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1470,7 +1500,7 @@ function App() {
         return inviteLink;
       }
       
-      setTransactionStatus(`Đã tạo link mời guardian: ${inviteLink}`);
+      setTransactionStatus(`Đã tạo link mời guardian: ${inviteLink}\nThreshold: ${walletThreshold}`);
       
       return inviteLink;
     } catch (error: any) {

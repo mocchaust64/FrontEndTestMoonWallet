@@ -98,6 +98,14 @@ const GuardianSignup: React.FC = () => {
       const compressedKeyBuffer = compressPublicKey(uncompressedKeyBuffer);
       
       // 4. Lưu dữ liệu vào Firebase
+      console.log("Thông tin invitation:", JSON.stringify(inviteData));
+      console.log("Threshold từ invitation:", inviteData.threshold);
+      
+      // Kiểm tra threshold và báo lỗi nếu không tồn tại
+      if (inviteData.threshold === undefined || inviteData.threshold === null) {
+        throw new Error("Threshold không được xác định! Không thể tạo guardian.");
+      }
+      
       await saveGuardianData({
         inviteCode: inviteCode || '',
         guardianId: inviteData.guardianId,
@@ -106,7 +114,8 @@ const GuardianSignup: React.FC = () => {
         hashedRecoveryBytes: Array.from(hashedRecoveryBytes), // Chuyển Uint8Array thành mảng thường để JSON hóa
         webauthnCredentialId: webAuthnResult.credentialId,
         webauthnPublicKey: Array.from(new Uint8Array(compressedKeyBuffer)), // Lưu khóa đã nén
-        status: 'ready'
+        status: 'ready',
+        threshold: inviteData.threshold // Truyền threshold
       });
       
       // 5. Lưu ánh xạ WebAuthn credential vào bảng mới
@@ -115,7 +124,8 @@ const GuardianSignup: React.FC = () => {
         inviteData.multisigAddress,
         Array.from(new Uint8Array(compressedKeyBuffer)),
         inviteData.guardianId,
-        inviteData.guardianName
+        guardianName,
+        inviteData.threshold // Đảm bảo luôn truyền threshold chính xác, không đặt giá trị mặc định
       );
       
       setStatus(prev => prev + '\nĐã lưu ánh xạ WebAuthn credential thành công!');
