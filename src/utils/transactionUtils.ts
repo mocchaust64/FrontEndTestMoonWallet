@@ -811,36 +811,40 @@ export const derToRaw = (derSignature: Uint8Array): Uint8Array => {
 };
 
 /**
- * Tạo transaction để phê duyệt một đề xuất giao dịch
- *
- * @param proposalPDA Địa chỉ của đề xuất cần phê duyệt
- * @param multisigPDA Địa chỉ ví multisig
+ * Tạo transaction để ký đề xuất
+ * 
+ * @param proposalPDA PDA của đề xuất
+ * @param multisigPDA PDA của multisig
  * @param guardianPDA PDA của guardian
  * @param guardianId ID của guardian
  * @param payer Người trả phí
  * @param webauthnSignature Chữ ký WebAuthn
  * @param authenticatorData Dữ liệu xác thực từ WebAuthn
  * @param clientDataJSON Dữ liệu client từ WebAuthn
+ * @param proposalId ID của đề xuất
+ * @param timestamp Thời gian ký
+ * @param credentialId Tùy chọn: Credential ID để ghi đè credential ID từ localStorage
  * @returns Giao dịch đã được tạo
  */
 export const createApproveProposalTx = async (
   proposalPDA: PublicKey,
   multisigPDA: PublicKey,
   guardianPDA: PublicKey,
-  guardianId: number, // Thêm tham số guardianId
+  guardianId: number,
   payer: PublicKey,
   webauthnSignature: Uint8Array,
   authenticatorData: Uint8Array,
   clientDataJSON: Uint8Array,
-  proposalId: string | number, // Thêm proposalId
-  timestamp: number // Thêm timestamp
+  proposalId: string | number,
+  timestamp: number,
+  credentialId?: string
 ): Promise<Transaction> => {
   // Tạo transaction mới
   const transaction = new Transaction();
 
-  // Lấy WebAuthn public key từ credential
+  // Lấy WebAuthn public key từ credential, truyền credentialId nếu có
   console.log("Đang tìm WebAuthn public key...");
-  const webAuthnPubKey = await getWebAuthnPublicKey(guardianPDA);
+  const webAuthnPubKey = await getWebAuthnPublicKey(guardianPDA, credentialId);
   
   if (!webAuthnPubKey) {
     throw new Error("Không tìm thấy WebAuthn public key cho guardian này");
@@ -961,21 +965,62 @@ async function findSignaturePDA(proposalPDA: PublicKey, guardianId: number): Pro
 
 /**
  * Hàm hỗ trợ để lấy WebAuthn public key cho guardian
+ * @param guardianPDA PublicKey của guardian
+ * @param overrideCredentialId Credential ID tùy chọn để ghi đè ID từ localStorage
  */
-async function getWebAuthnPublicKey(guardianPDA: PublicKey): Promise<Buffer> {
+async function getWebAuthnPublicKey(guardianPDA: PublicKey, overrideCredentialId?: string): Promise<Buffer> {
   console.log("Tìm WebAuthn public key cho guardian:", guardianPDA.toString());
   
-  // Giả lập việc lấy từ localStorage hoặc cache
-  const publicKeyHex = localStorage.getItem("guardianPublicKey");
-  if (publicKeyHex) {
-    console.log("Đã tìm thấy public key trong localStorage:", publicKeyHex.slice(0, 10) + "...");
-    const pubKeyBuffer = Buffer.from(publicKeyHex, 'hex');
-    console.log("Độ dài public key:", pubKeyBuffer.length);
-    return pubKeyBuffer;
+  let credentialId: string;
+  let normalizedCredentialId: string;
+  
+  if (overrideCredentialId) {
+    // Sử dụng credential ID được chỉ định
+    credentialId = overrideCredentialId;
+    console.log("Sử dụng credential ID được chỉ định:", credentialId);
+  } else {
+    // Kiểm tra xem có credential ID trong localStorage không
+    const userCredentials = JSON.parse(localStorage.getItem("userCredentials") || "[]");
+    if (userCredentials.length === 0) {
+      throw new Error("Không tìm thấy thông tin đăng nhập WebAuthn. Vui lòng đăng nhập trước.");
+    }
+    
+    credentialId = userCredentials[0].id;
+    console.log("Sử dụng credential ID từ userCredentials:", credentialId);
   }
   
-  // Trong thực tế, bạn có thể cần truy vấn dữ liệu này từ blockchain hoặc Firebase
-  throw new Error("Không tìm thấy WebAuthn public key, hãy đăng nhập trước");
+  // Chuẩn hóa credential ID
+  const normalizeCredentialId = (credId: string): string => {
+    // Đảm bảo credId là base64
+    try {
+      const buffer = Buffer.from(credId, 'base64');
+      return buffer.toString('hex');
+    } catch (e) {
+      // Nếu đã là hex, trả về nguyên
+      return credId;
+    }
+  };
+  
+  normalizedCredentialId = normalizeCredentialId(credentialId);
+  console.log("Normalized credential ID:", normalizedCredentialId);
+  
+  // Lấy public key theo credential ID cụ thể
+  const credentialSpecificKey = `guardianPublicKey_${normalizedCredentialId}`;
+  const publicKeyHex = localStorage.getItem(credentialSpecificKey);
+  
+  if (!publicKeyHex) {
+    throw new Error(`Không tìm thấy public key cho credential ID: ${credentialId}. Khóa '${credentialSpecificKey}' không tồn tại trong localStorage.`);
+  }
+  
+  console.log("Đã tìm thấy public key trong localStorage theo credential ID:", publicKeyHex.slice(0, 10) + "...");
+  const pubKeyBuffer = Buffer.from(publicKeyHex, 'hex');
+  console.log("Độ dài public key:", pubKeyBuffer.length);
+  
+  if (pubKeyBuffer.length !== 33 && pubKeyBuffer.length !== 65) {
+    throw new Error(`Public key không đúng định dạng: độ dài ${pubKeyBuffer.length} bytes, cần 33 hoặc 65 bytes.`);
+  }
+  
+  return pubKeyBuffer;
 }
 
 /**

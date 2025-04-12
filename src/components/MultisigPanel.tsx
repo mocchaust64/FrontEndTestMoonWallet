@@ -4,8 +4,6 @@ import { Program, BN } from '@coral-xyz/anchor';
 import {
   findMultisigWallet,
   loadProposals,
-  createRandomKeypair,
-  requestTestSOL,
   initializeProgram,
   getEnvKeypair
 } from '../utils/multisig/multisigUtils';
@@ -13,8 +11,6 @@ import { Connection } from '@solana/web3.js';
 import { getWebAuthnAssertion, createWebAuthnVerificationData } from '../utils/webauthnUtils';
 import { 
   createSecp256r1Instruction,
-  verifySecp256r1Signature,
-  SECP256R1_PROGRAM_ID,
   checkSecp256r1Program,
   derToRaw,
   SYSVAR_CLOCK_PUBKEY
@@ -24,13 +20,11 @@ import { getWalletByCredentialId } from '../firebase/webAuthnService';
 import { getGuardianPDA } from '../utils/credentialUtils';
 import { TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_ID } from '../utils/constants';
-import { db } from '../firebase/config';
-import { collection, addDoc, Timestamp, doc, setDoc } from 'firebase/firestore';
+import {  Timestamp} from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { createProposal, addSignerToProposal, updateProposalStatus } from '../firebase/proposalService';
 import { sha256 } from '@noble/hashes/sha256';
 
-// Thêm hằng số cho chuẩn hóa chữ ký secp256r1
 const SECP256R1_ORDER = new BN('FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551', 16);
 const SECP256R1_HALF_ORDER = SECP256R1_ORDER.shrn(1);
 

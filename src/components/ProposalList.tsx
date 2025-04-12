@@ -336,23 +336,19 @@ const ProposalList: React.FC = () => {
       // Lấy WebAuthn public key - xử lý giống như trong TransferForm
       let webAuthnPubKey: Buffer;
       
-      // Thử lấy guardianPublicKey từ localStorage trước (giống như TransferForm.tsx)
-      const cachedGuardianPublicKey = localStorage.getItem("guardianPublicKey");
-      
-      if (cachedGuardianPublicKey) {
-        // Sử dụng WebAuthn public key từ localStorage
-        console.log('Sử dụng WebAuthn public key từ localStorage');
-        webAuthnPubKey = Buffer.from(cachedGuardianPublicKey, 'hex');
-        console.log('webAuthnPubKey from hex:', webAuthnPubKey.toString('hex'));
-      } else {
-        // Fallback: Sử dụng WebAuthn public key từ Firebase nếu không có trong localStorage
-        console.log('Không tìm thấy trong localStorage, sử dụng WebAuthn public key từ Firebase');
+      // Luôn lấy key từ Firebase như khi tạo đề xuất - không dùng localStorage
+      if (webAuthnWallet.guardianPublicKey) {
+        // Sử dụng WebAuthn public key từ Firebase
+        console.log('Sử dụng WebAuthn public key từ Firebase để đảm bảo khớp với key lúc tạo đề xuất');
         webAuthnPubKey = Buffer.from(new Uint8Array(webAuthnWallet.guardianPublicKey));
         
-        // Lưu vào localStorage cho các lần sau - đúng định dạng hex
+        // Lưu vào localStorage THEO CREDENTIAL ID để các hàm trong transactionUtils có thể sử dụng
+        const credentialSpecificKey = `guardianPublicKey_${normalizedCredentialId}`;
         const guardianPublicKey = Buffer.from(new Uint8Array(webAuthnWallet.guardianPublicKey)).toString('hex');
-        console.log("Lưu guardianPublicKey vào localStorage:", guardianPublicKey.slice(0, 10) + "...");
-        localStorage.setItem("guardianPublicKey", guardianPublicKey);
+        console.log("Lưu guardianPublicKey vào localStorage theo credential ID:", guardianPublicKey.slice(0, 10) + "...");
+        localStorage.setItem(credentialSpecificKey, guardianPublicKey);
+      } else {
+        throw new Error("Không tìm thấy WebAuthn public key trong Firebase");
       }
       
       console.log('==== DEBUG WEBAUTHN PUBLIC KEY ====');
@@ -663,29 +659,19 @@ const ProposalList: React.FC = () => {
       // Step 4: Tính hash của WebAuthn public key nếu có
       let webAuthnPubKey: Buffer;
       
-      // Thử lấy guardianPublicKey từ localStorage trước (giống như TransferForm.tsx)
-      const cachedGuardianPublicKey = localStorage.getItem("guardianPublicKey");
-      
-      if (cachedGuardianPublicKey) {
-        // Sử dụng WebAuthn public key từ localStorage
-        console.log('Sử dụng WebAuthn public key từ localStorage');
-        
-        // Cách chuyển đổi này khác với cách trước đó - phải dùng đúng như TransferForm.tsx
-        webAuthnPubKey = Buffer.from(cachedGuardianPublicKey, 'hex');
-        console.log('webAuthnPubKey from hex:', webAuthnPubKey.toString('hex'));
-      } else if (credentialMapping.guardianPublicKey) {
-        // Fallback: Sử dụng WebAuthn public key từ Firebase nếu không có trong localStorage
-        console.log('Không tìm thấy trong localStorage, sử dụng WebAuthn public key từ Firebase');
-        
-        // Cách chuyển đổi này cũng quan trọng - phải giống như trong TransferForm
+      // Luôn lấy key từ Firebase như khi tạo đề xuất - không dùng localStorage
+      if (credentialMapping.guardianPublicKey) {
+        // Sử dụng WebAuthn public key từ Firebase
+        console.log('Sử dụng WebAuthn public key từ Firebase để đảm bảo khớp với key lúc tạo đề xuất');
         webAuthnPubKey = Buffer.from(new Uint8Array(credentialMapping.guardianPublicKey));
         
-        // Lưu vào localStorage cho các lần sau - đúng định dạng hex
+        // Lưu vào localStorage THEO CREDENTIAL ID để các hàm trong transactionUtils có thể sử dụng
+        const credentialSpecificKey = `guardianPublicKey_${normalizedCredentialId}`;
         const guardianPublicKey = Buffer.from(new Uint8Array(credentialMapping.guardianPublicKey)).toString('hex');
-        console.log("Lưu guardianPublicKey vào localStorage:", guardianPublicKey.slice(0, 10) + "...");
-        localStorage.setItem("guardianPublicKey", guardianPublicKey);
+        console.log("Lưu guardianPublicKey vào localStorage theo credential ID:", guardianPublicKey.slice(0, 10) + "...");
+        localStorage.setItem(credentialSpecificKey, guardianPublicKey);
       } else {
-        throw new Error("Không tìm thấy WebAuthn public key");
+        throw new Error("Không tìm thấy WebAuthn public key trong Firebase");
       }
       
       console.log('==== DEBUG WEBAUTHN PUBLIC KEY ====');
@@ -778,11 +764,12 @@ const ProposalList: React.FC = () => {
         guardianPDA,
         guardianId,
         projectFeePayerKeypair.publicKey,
-        signature,
-        authenticatorData,
-        clientDataJSON,
+        new Uint8Array(response.signature),
+        new Uint8Array(response.authenticatorData),
+        new Uint8Array(response.clientDataJSON),
         proposalId,
-        timestamp
+        timestamp,
+        credentialIdString
       );
       
       // Thiết lập recent blockhash và fee payer
