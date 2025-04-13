@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Connection, PublicKey, Keypair, Transaction, SystemProgram, TransactionInstruction, Commitment, Signer, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
+import { PublicKey, Keypair, Transaction, SystemProgram, TransactionInstruction, Commitment, Signer, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import './App.css';
 import { createWebAuthnCredential, getWebAuthnAssertionForLogin, calculateMultisigAddress, getWebAuthnAssertion } from './utils/webauthnUtils';
 import { processCredentialIdForPDA, getMultisigPDA, getGuardianPDA, getAllGuardianPDAs } from './utils/credentialUtils';
@@ -26,20 +26,9 @@ import ProposalList from './components/ProposalList';
 import ProposalDetail from './components/ProposalDetail';
 import { ProgramProvider } from './contexts/ProgramContext';
 import { PROGRAM_ID } from './utils/constants';
-
-const RPC_ENDPOINT = process.env.REACT_APP_RPC_ENDPOINT || 'http://127.0.0.1:8899'; // Localhost validator
-
-// Tùy chọn kết nối
-const connectionOptions = {
-  commitment: 'confirmed' as Commitment,
-  confirmTransactionInitialTimeout: 60000,
-  disableRetryOnRateLimit: false,
-  fetch: fetch
-};
-
-// Connection với validator
-const connection = new Connection(RPC_ENDPOINT, connectionOptions);
-
+import GuardianSignup from './components/GuardianSignup';
+import ProposalSignPage from './components/ProposalSignPage';
+import { connection } from './config/solana';
 
 function bufferToUint8Array(buffer: Buffer): Uint8Array {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -1743,7 +1732,7 @@ Guardian đã sẵn sàng để sử dụng trong ví multisig của bạn.`);
             
             <div className="connection-info">
               <h2>Thông tin kết nối</h2>
-              <p>Đang kết nối tới: <strong>{RPC_ENDPOINT}</strong></p>
+              <p>Đang kết nối tới: <strong>{connection.rpcEndpoint}</strong></p>
               <p>Program ID: <strong>{PROGRAM_ID.toString()}</strong></p>
               <p>Fee Payer: <strong>{projectFeePayerKeypair ? projectFeePayerKeypair.publicKey.toString() : 'Chưa khởi tạo'}</strong></p>
               <p>Số dư Fee Payer: <strong>{isLoadingFeePayerBalance ? 'Đang tải...' : `${feePayerBalance} SOL`}</strong></p>
@@ -2060,7 +2049,6 @@ Guardian đã sẵn sàng để sử dụng trong ví multisig của bạn.`);
           <h2>Kiểm thử đa chữ ký</h2>
           <MultisigPanel 
             credentialId={Buffer.from(credentialId, 'base64')} 
-            connection={connection} 
           />
         </div>
       )}

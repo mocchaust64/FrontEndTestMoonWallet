@@ -51,11 +51,7 @@ const normalizeSignatureToLowS = (sig: Buffer): Buffer => {
 
 // Thêm hàm hỗ trợ tạo link tới Solana Explorer
 const getSolanaExplorerLink = (signature: string) => {
-  const explorerBaseUrl = process.env.REACT_APP_NETWORK === 'mainnet' 
-    ? 'https://explorer.solana.com/tx/' 
-    : 'https://explorer.solana.com/tx/?cluster=devnet';
-  
-  return `${explorerBaseUrl}/${signature}`;
+  return `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=https%3A%2F%2Frpc.lazorkit.xyz`;
 };
 
 // Kiểm tra log thành công từ blockchain
@@ -515,13 +511,18 @@ const ProposalList: React.FC = () => {
         
         // Gửi transaction
         console.log("Đang gửi transaction...");
-        const signature = await connection.sendRawTransaction(transaction.serialize());
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3
+        });
         console.log("Transaction đã được gửi với signature:", signature);
         
         // Xác nhận giao dịch
         console.log("Đang chờ xác nhận giao dịch...");
-        const confirmation = await connection.confirmTransaction(signature, 'confirmed');
-        console.log("Transaction đã được xác nhận:", confirmation);
+        // Không sử dụng confirmTransaction - vì gây lỗi WebSocket
+        // const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+        // console.log("Transaction đã được xác nhận:", confirmation);
         
         // Cập nhật trạng thái đề xuất trong Firebase
         console.log("Cập nhật trạng thái đề xuất trong Firebase...");
@@ -532,7 +533,9 @@ const ProposalList: React.FC = () => {
           signature
         );
         
-        setSignSuccess(`Đã thực thi đề xuất thành công! Signature: ${signature}`);
+        const explorerLink = getSolanaExplorerLink(signature);
+        setSignSuccess(`Đã thực thi đề xuất thành công! 
+          @${explorerLink}`);
         setSigningLoading(false);
         
         // Refresh danh sách proposal
@@ -776,75 +779,102 @@ const ProposalList: React.FC = () => {
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
       tx.feePayer = projectFeePayerKeypair.publicKey;
       
-      // Ký transaction với project fee payer keypair
-      tx.partialSign(projectFeePayerKeypair);
-      
       // Gửi transaction lên blockchain
       setSignSuccess('Đang gửi giao dịch ký đề xuất lên blockchain...');
       
-      const txSignature = await connection.sendRawTransaction(tx.serialize(), {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed'
-      });
-      
-      console.log("Giao dịch ký đề xuất đã được gửi:", txSignature);
-      
-      // Xử lý kết quả giao dịch
       try {
-        await connection.confirmTransaction(txSignature, 'confirmed');
-        console.log("Giao dịch ký đề xuất đã được xác nhận trên blockchain");
+        // Ký transaction với project fee payer keypair
+        tx.partialSign(projectFeePayerKeypair);
         
-        // Lấy thông tin chi tiết của giao dịch
-        const txDetails = await getTxDetailsFromBlockchain(connection, txSignature);
+        // Gửi transaction với sendRawTransaction để sử dụng tx đã ký
+        const txSignature = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3
+        });
         
-        if (txDetails) {
-          if (txDetails.success) {
-            const explorerLink = getSolanaExplorerLink(txSignature);
-            setSignSuccess(`Ký đề xuất thành công! ID giao dịch: ${txSignature}. 
-              Xem trên Solana Explorer: ${explorerLink}`);
-              
-            // Cập nhật Firebase khi giao dịch thành công
-            await addSignerToProposal(
-              walletAddress.toString(),
-              currentSigningProposal.proposalId,
-              webAuthnPubKey.toString('hex') // Sử dụng webAuthnPubKey làm signerPublicKey
-            );
-            
-            // Cập nhật UI và tải lại danh sách đề xuất
-            setSignSuccess('Ký đề xuất thành công! Đã thêm chữ ký của bạn vào đề xuất và gửi lên blockchain.');
-            fetchProposals(walletAddress);
-          } else {
-            // Xử lý các lỗi phổ biến
-            let errorMessage = `Giao dịch được xác nhận nhưng có lỗi: ${txDetails.error}`;
-            
-            if (txDetails.logs) {
-              const logs = txDetails.logs.join(' ');
-              console.error("Blockchain logs:", logs);
-              
-              if (logs.includes("expected this account to be already initialized")) {
-                errorMessage = "Tài khoản multisig chưa được khởi tạo trên blockchain. Hãy tạo multisig trước khi ký đề xuất.";
-              } else if (logs.includes("has already signed this proposal")) {
-                errorMessage = "Bạn đã ký đề xuất này trước đó.";
-              } else if (logs.includes("proposal not found")) {
-                errorMessage = "Không tìm thấy đề xuất này trên blockchain.";
-              }
-            }
-            
-            setSignError(errorMessage);
-          }
+        console.log("Giao dịch ký đề xuất đã được gửi:", txSignature);
+        
+        // Thành: Cập nhật Firebase ngay sau khi gửi giao dịch thành công
+        console.log("Giao dịch đã được gửi thành công, cập nhật Firebase...");
+        
+        // Cập nhật trạng thái đề xuất trong Firebase
+        console.log("Cập nhật trạng thái đề xuất trong Firebase...");
+        await addSignerToProposal(
+          walletAddress.toString(),
+          currentSigningProposal.proposalId,
+          webAuthnPubKey.toString('hex') // Sử dụng webAuthnPubKey làm signerPublicKey
+        );
+        
+        const explorerLink = getSolanaExplorerLink(txSignature);
+        setSignSuccess(`Ký đề xuất thành công! 
+          @${explorerLink}`);
+        
+        // Refreshing danh sách đề xuất sau khi ký
+        if (walletAddress) {
+          fetchProposals(walletAddress);
         }
-      } catch (confirmError: any) {
-        console.warn("Lỗi khi xác nhận giao dịch:", confirmError);
-        setSignError(`Lỗi xác nhận giao dịch: ${confirmError.message}`);
-      }
-      
-      // Sau khi ký đề xuất thành công:
-      setSignSuccess(`Đã ký đề xuất thành công với signature: ${txSignature}`);
-      setSigningLoading(false);
-      
-      // Thêm dòng này để refresh danh sách đề xuất sau khi ký
-      if (walletAddress) {
-        fetchProposals(walletAddress);
+        
+        setSigningLoading(false);
+      } catch (sendError: any) {
+        // Xử lý lỗi khi gửi giao dịch
+        console.error('Lỗi khi gửi giao dịch:', sendError);
+        
+        // Lấy logs từ kết quả simulation nếu có
+        let logs: string[] = [];
+        if (sendError.logs) {
+          logs = sendError.logs;
+          console.error("Logs đầy đủ từ blockchain:", logs);
+        }
+        
+        // Phân tích thông tin lỗi để hiển thị thông báo cụ thể
+        let errorMessage = "Lỗi khi ký đề xuất";
+        
+        if (logs.length > 0) {
+          // Hiển thị logs chi tiết trong UI
+          errorMessage = "Lỗi từ chương trình Solana:\n\n" + logs.join('\n');
+        } else if (sendError.message.includes("custom program error: 0x")) {
+          // Trích xuất mã lỗi
+          const errorMatch = sendError.message.match(/custom program error: (0x[0-9a-fA-F]+)/);
+          if (errorMatch && errorMatch[1]) {
+            const errorCode = errorMatch[1];
+            
+            // Thêm giải thích cho mã lỗi cụ thể
+            switch (errorCode) {
+              case "0x1":
+                errorMessage = "Lỗi khởi tạo không hợp lệ";
+                break;
+              case "0x2":
+                errorMessage = "Lỗi tham số không hợp lệ";
+                break;
+              case "0x3":
+                errorMessage = "Đề xuất đã tồn tại";
+                break;
+              case "0x4":
+                errorMessage = "Đề xuất không tồn tại";
+                break;
+              case "0x5":
+                errorMessage = "Guardian không hợp lệ";
+                break;
+              case "0x6":
+                errorMessage = "Chữ ký không hợp lệ";
+                break;
+              case "0x7":
+                errorMessage = "Không đủ chữ ký để thực thi";
+                break;
+              case "0x8":
+                errorMessage = "Đề xuất đã được thực thi";
+                break;
+              default:
+                errorMessage = `Lỗi chương trình: ${errorCode}`;
+            }
+          }
+        } else if (sendError.message) {
+          errorMessage = sendError.message;
+        }
+        
+        setSignError(errorMessage);
+        setSigningLoading(false);
       }
       
     } catch (error: any) {

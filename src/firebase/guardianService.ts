@@ -28,6 +28,7 @@ export interface InviteData {
   guardianId: number;
   ownerId: string;
   status: 'pending' | 'ready' | 'completed';
+  
   createdAt: Timestamp;
   guardianName?: string;
   threshold?: number; // Số lượng chữ ký cần thiết cho ví multisig

@@ -267,4 +267,35 @@ export const addSignerToProposal = async (
     console.error(`Lỗi khi thêm chữ ký vào đề xuất ${proposalId}:`, error);
     throw error;
   }
+};
+
+// Cập nhật đề xuất với link ký
+export const updateProposalWithSigningLink = async (
+  proposalAddress: string,
+  signingLink: string
+): Promise<boolean> => {
+  try {
+    // Tìm proposal theo proposalAddress
+    const proposalsRef = collection(db, 'proposals');
+    const q = query(proposalsRef, where('proposalAddress', '==', proposalAddress));
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      console.error(`Không tìm thấy đề xuất với proposalAddress: ${proposalAddress}`);
+      return false;
+    }
+    
+    // Cập nhật proposal với signingLink
+    const docRef = doc(db, 'proposals', querySnapshot.docs[0].id);
+    await updateDoc(docRef, {
+      signingLink,
+      updatedAt: serverTimestamp()
+    });
+    
+    console.log(`Đã cập nhật link ký cho proposal: ${proposalAddress}`);
+    return true;
+  } catch (error) {
+    console.error("Lỗi khi cập nhật link ký đề xuất:", error);
+    return false;
+  }
 }; 

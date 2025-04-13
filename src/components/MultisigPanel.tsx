@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PublicKey, Keypair, Transaction, SystemProgram, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
+import { PublicKey, Keypair, Transaction, SystemProgram, LAMPORTS_PER_SOL, sendAndConfirmTransaction, Connection, TransactionInstruction } from '@solana/web3.js';
 import { Program, BN } from '@coral-xyz/anchor';
 import {
   findMultisigWallet,
@@ -7,7 +7,7 @@ import {
   initializeProgram,
   getEnvKeypair
 } from '../utils/multisig/multisigUtils';
-import { Connection } from '@solana/web3.js';
+import { connection } from '../config/solana';
 import { getWebAuthnAssertion, createWebAuthnVerificationData } from '../utils/webauthnUtils';
 import { 
   createSecp256r1Instruction,
@@ -18,12 +18,12 @@ import {
 import { createActionParams } from '../utils/types';
 import { getWalletByCredentialId } from '../firebase/webAuthnService';
 import { getGuardianPDA } from '../utils/credentialUtils';
-import { TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_ID } from '../utils/constants';
-import {  Timestamp} from 'firebase/firestore';
+import { Timestamp } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { createProposal, addSignerToProposal, updateProposalStatus, getProposalsByWallet } from '../firebase/proposalService';
+import { createProposal, addSignerToProposal, updateProposalStatus, getProposalsByWallet, updateProposalWithSigningLink } from '../firebase/proposalService';
 import { sha256 } from '@noble/hashes/sha256';
+import { QRCodeSVG as QRCode } from 'qrcode.react';
 
 const SECP256R1_ORDER = new BN('FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551', 16);
 const SECP256R1_HALF_ORDER = SECP256R1_ORDER.shrn(1);
@@ -280,10 +280,9 @@ const styles = {
 // Props interface
 interface MultisigPanelProps {
   credentialId: Uint8Array;
-  connection: Connection;
 }
 
-export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, connection }) => {
+export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId }) => {
   const [showTransferForm, setShowTransferForm] = useState<boolean>(false);
   const [showMultisigPanel, setShowMultisigPanel] = useState<boolean>(false);
   const [status, setStatus] = useState<string>('');
@@ -305,6 +304,10 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
 
   // Thêm navigate để điều hướng
   const navigate = useNavigate();
+
+  // State cho việc hiển thị QR code và link ký đề xuất
+  const [proposalSigningLink, setProposalSigningLink] = useState<string>('');
+  const [showProposalQR, setShowProposalQR] = useState<boolean>(false);
 
   // Khởi tạo
   useEffect(() => {
@@ -857,7 +860,8 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
                 amount: amountLamports.toNumber(),
                 destination: destinationPubkey.toString(),
                 tokenMint: null,
-                transactionSignature: signature
+                transactionSignature: signature,
+                proposalAddress: proposalPubkey.toString(), // Thêm trường proposalAddress
               };
               
               console.log("Lưu proposal vào Firebase:", proposalData);
@@ -867,6 +871,19 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
                 console.log("Bắt đầu lưu proposal vào Firebase với dữ liệu:", proposalData);
                 const docId = await createProposal(proposalData);
                 console.log("Đã lưu proposal vào Firebase thành công, ID:", docId);
+                
+                // Tạo link ký đề xuất và lưu vào Firebase
+                const baseUrl = window.location.origin;
+                const signingLink = `${baseUrl}/#/sign-proposal/${proposalPubkey.toString()}`;
+                
+                // Cập nhật proposal với link ký
+                await updateProposalWithSigningLink(proposalPubkey.toString(), signingLink);
+                
+                // Hiển thị link và QR code
+                setProposalSigningLink(signingLink);
+                setShowProposalQR(true);
+                
+                setStatus(`Đã tạo đề xuất thành công! Signature: ${signature}\nLink ký đề xuất: ${signingLink}`);
               } catch (firebaseError) {
                 console.error("Lỗi chi tiết khi lưu proposal vào Firebase:", firebaseError);
                 // Hiển thị thông tin lỗi cụ thể hơn
@@ -877,7 +894,6 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
                 }
               }
               
-              setStatus(`Đã tạo đề xuất thành công! Signature: ${signature}`);
               setShowProposalForm(false);
               
               // Tải lại danh sách đề xuất
@@ -1018,307 +1034,6 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
     }
   };
   
-  // Hàm phê duyệt đề xuất
-  const handleApproveProposal = async (proposalId: string, proposalPubkey: PublicKey) => {
-    try {
-      setIsLoading(true);
-      setStatus('Đang chuẩn bị phê duyệt đề xuất...');
-
-      if (!multisigInfo || !payerKeypair) {
-        throw new Error('Thông tin ví multisig hoặc keypair không khả dụng');
-      }
-
-      // 1. Lấy xác thực WebAuthn
-      const credentialIdString = Buffer.from(credentialId).toString('hex');
-      const assertion = await getWebAuthnAssertion(credentialIdString, undefined, true);
-      if (!assertion) {
-        throw new Error("Không thể lấy WebAuthn assertion");
-      }
-      setStatus(prev => `${prev}\nĐã lấy xác thực WebAuthn thành công.`);
-
-      // LẤY WEBAUTHN PUBLIC KEY THẬT TỪ FIREBASE
-      console.log('Lấy WebAuthn public key...');
-      let webAuthnPubKey: Buffer;
-      
-      // Thử tìm trong Firebase
-      const credentialMapping = await getWalletByCredentialId(credentialIdString);
-      
-      if (!credentialMapping || !credentialMapping.guardianPublicKey || credentialMapping.guardianPublicKey.length === 0) {
-        // Thử tìm trong localStorage
-        console.log('Không tìm thấy trong Firebase, thử tìm trong localStorage...');
-        const localStorageData = localStorage.getItem('webauthn_credential_' + credentialIdString);
-        if (localStorageData) {
-          const localMapping = JSON.parse(localStorageData);
-          if (localMapping && localMapping.guardianPublicKey && localMapping.guardianPublicKey.length > 0) {
-            webAuthnPubKey = Buffer.from(new Uint8Array(localMapping.guardianPublicKey));
-          } else {
-            throw new Error('Không tìm thấy WebAuthn public key trong localStorage');
-          }
-        } else {
-          throw new Error('Không tìm thấy WebAuthn public key');
-        }
-      } else {
-        // Sử dụng WebAuthn public key từ Firebase
-        webAuthnPubKey = Buffer.from(new Uint8Array(credentialMapping.guardianPublicKey));
-      }
-      
-      console.log('Đã lấy được WebAuthn public key thật:', webAuthnPubKey.toString('hex'));
-
-      // 2. Chuẩn bị message cho secp256r1
-      const timestamp = Math.floor(Date.now() / 1000);
-      // Tạo message theo định dạng yêu cầu của contract
-      const messageString = `approve:proposal_${proposalId},timestamp:${timestamp},pubkey:${payerKeypair.publicKey.toBase58()}`;
-      
-      // 4. Chuyển đổi từ DER sang raw
-      const signatureRaw = derToRaw(assertion.signature);
-      const signatureBuffer = Buffer.from(signatureRaw);
-      
-      console.log("Signature (raw):", signatureBuffer.toString('hex'));
-      
-      // Chuẩn hóa signature về dạng Low-S
-      const normalizedSignature = normalizeSignatureToLowS(signatureBuffer);
-      console.log("Normalized signature:", normalizedSignature.toString('hex'));
-      
-      // ĐÚNG QUY TRÌNH XÁC MINH WEBAUTHN:
-      // 1. Tính hash của clientDataJSON
-      const clientDataHash = await crypto.subtle.digest('SHA-256', assertion.clientDataJSON);
-      const clientDataHashBytes = new Uint8Array(clientDataHash);
-      console.log('clientDataJSON hash:', Buffer.from(clientDataHashBytes).toString('hex'));
-      
-      // 2. Tạo verification data đúng cách: authenticatorData + hash(clientDataJSON)
-      const verificationData = new Uint8Array(assertion.authenticatorData.length + clientDataHashBytes.length);
-      verificationData.set(new Uint8Array(assertion.authenticatorData), 0);
-      verificationData.set(clientDataHashBytes, assertion.authenticatorData.length);
-      
-      console.log('Verification data length:', verificationData.length);
-      console.log('Verification data (hex):', Buffer.from(verificationData).toString('hex'));
-      
-      setStatus(prev => `${prev}\nĐang tạo transaction với 2 instructions...`);
-      
-      // 5. Tạo instruction cho secp256r1
-      const secp256r1Instruction = createSecp256r1Instruction(
-        Buffer.from(verificationData), // Sử dụng verification data
-        webAuthnPubKey,  // Sử dụng public key thật từ Firebase
-        normalizedSignature  // Sử dụng chữ ký đã chuẩn hóa
-      );
-      
-      // 6. Tạo instruction cho moon wallet program để phê duyệt đề xuất
-      // Đây là phần giả định - bạn cần thay thế với instruction thực tế từ API của bạn
-      // (Tương tự như trong TransferForm.tsx)
-      
-      // Tạo transaction và thêm cả hai instruction
-      const transaction = new Transaction();
-      transaction.add(secp256r1Instruction);
-      
-      // TODO: Thêm instruction phê duyệt đề xuất của moon wallet
-      // transaction.add(approveProposalInstruction);
-      
-      // 7. Gửi transaction
-      // Sử dụng skipPreflight để tránh lỗi với secp256r1 instruction
-      transaction.feePayer = payerKeypair.publicKey;
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      
-      try {
-        const txId = await sendAndConfirmTransaction(
-          connection,
-          transaction,
-          [payerKeypair],
-          {
-            skipPreflight: false, // Thay đổi để bắt lỗi sớm
-            preflightCommitment: 'confirmed'
-          }
-        );
-        
-        setStatus(`Đã phê duyệt đề xuất thành công! TxID: ${txId}`);
-        
-        // Tải lại danh sách đề xuất
-        loadMultisigProposals(multisigInfo.pubkey, program);
-        
-        // Cập nhật danh sách chữ ký trong Firebase chỉ khi giao dịch thành công
-        try {
-          await addSignerToProposal(
-            multisigInfo.pubkey.toString(),
-            parseInt(proposalId),
-            payerKeypair.publicKey.toString() // Đây là địa chỉ Solana, không phải WebAuthn public key
-          );
-          console.log(`Đã thêm ${payerKeypair.publicKey.toString()} vào danh sách người ký của đề xuất ${proposalId}`);
-        } catch (firebaseError) {
-          console.error("Lỗi khi cập nhật danh sách chữ ký trên Firebase:", firebaseError);
-          // Không throw error ở đây vì transaction blockchain đã thành công
-        }
-      } catch (txError) {
-        console.error("Lỗi khi gửi giao dịch:", txError);
-        setStatus(`Lỗi khi gửi giao dịch: ${txError instanceof Error ? txError.message : String(txError)}`);
-      }
-    } catch (error) {
-      console.error("Lỗi khi phê duyệt đề xuất:", error);
-      setStatus(`Lỗi: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  // Hàm thực thi đề xuất
-  const handleExecuteProposal = async (proposalId: string, proposalPubkey: PublicKey) => {
-    try {
-      setIsLoading(true);
-      setStatus('Đang chuẩn bị thực thi đề xuất...');
-      
-      if (!multisigInfo || !payerKeypair) {
-        throw new Error('Thông tin ví multisig hoặc keypair không khả dụng');
-      }
-
-      // 1. Lấy xác thực WebAuthn
-      const credentialIdString = Buffer.from(credentialId).toString('hex');
-      const assertion = await getWebAuthnAssertion(credentialIdString, undefined, true);
-      if (!assertion) {
-        throw new Error("Không thể lấy WebAuthn assertion");
-      }
-      setStatus(prev => `${prev}\nĐã lấy xác thực WebAuthn thành công.`);
-
-      // LẤY WEBAUTHN PUBLIC KEY THẬT TỪ FIREBASE
-      console.log('Lấy WebAuthn public key...');
-      let webAuthnPubKey: Buffer;
-      
-      // Thử tìm trong Firebase
-      const credentialMapping = await getWalletByCredentialId(credentialIdString);
-      
-      if (!credentialMapping || !credentialMapping.guardianPublicKey || credentialMapping.guardianPublicKey.length === 0) {
-        // Thử tìm trong localStorage
-        console.log('Không tìm thấy trong Firebase, thử tìm trong localStorage...');
-        const localStorageData = localStorage.getItem('webauthn_credential_' + credentialIdString);
-        if (localStorageData) {
-          const localMapping = JSON.parse(localStorageData);
-          if (localMapping && localMapping.guardianPublicKey && localMapping.guardianPublicKey.length > 0) {
-            webAuthnPubKey = Buffer.from(new Uint8Array(localMapping.guardianPublicKey));
-          } else {
-            throw new Error('Không tìm thấy WebAuthn public key trong localStorage');
-          }
-        } else {
-          throw new Error('Không tìm thấy WebAuthn public key');
-        }
-      } else {
-        // Sử dụng WebAuthn public key từ Firebase
-        webAuthnPubKey = Buffer.from(new Uint8Array(credentialMapping.guardianPublicKey));
-      }
-      
-      console.log('Đã lấy được WebAuthn public key thật:', webAuthnPubKey.toString('hex'));
-
-      // 2. Chuẩn bị message cho secp256r1
-      const timestamp = Math.floor(Date.now() / 1000);
-      // Tạo message theo định dạng yêu cầu của contract
-      const messageString = `execute:proposal_${proposalId},timestamp:${timestamp},pubkey:${payerKeypair.publicKey.toBase58()}`;
-      
-      // 4. Chuyển đổi từ DER sang raw
-      const signatureRaw = derToRaw(assertion.signature);
-      const signatureBuffer = Buffer.from(signatureRaw);
-      
-      console.log("Signature (raw):", signatureBuffer.toString('hex'));
-      
-      // Chuẩn hóa signature về dạng Low-S
-      const normalizedSignature = normalizeSignatureToLowS(signatureBuffer);
-      console.log("Normalized signature:", normalizedSignature.toString('hex'));
-      
-      // ĐÚNG QUY TRÌNH XÁC MINH WEBAUTHN:
-      // 1. Tính hash của clientDataJSON
-      const clientDataHash = await crypto.subtle.digest('SHA-256', assertion.clientDataJSON);
-      const clientDataHashBytes = new Uint8Array(clientDataHash);
-      console.log('clientDataJSON hash:', Buffer.from(clientDataHashBytes).toString('hex'));
-      
-      // 2. Tạo verification data đúng cách: authenticatorData + hash(clientDataJSON)
-      const verificationData = new Uint8Array(assertion.authenticatorData.length + clientDataHashBytes.length);
-      verificationData.set(new Uint8Array(assertion.authenticatorData), 0);
-      verificationData.set(clientDataHashBytes, assertion.authenticatorData.length);
-      
-      console.log('Verification data length:', verificationData.length);
-      console.log('Verification data (hex):', Buffer.from(verificationData).toString('hex'));
-      
-      setStatus(prev => `${prev}\nĐang tạo transaction với 2 instructions...`);
-      
-      // 5. Tạo instruction cho secp256r1
-      const secp256r1Instruction = createSecp256r1Instruction(
-        Buffer.from(verificationData), // Sử dụng verification data
-        webAuthnPubKey,  // Sử dụng public key thật từ Firebase
-        normalizedSignature  // Sử dụng chữ ký đã chuẩn hóa
-      );
-      
-      // 6. Tạo instruction cho moon wallet program để thực thi đề xuất
-      // Tạo transaction và thêm instruction
-      const transaction = new Transaction();
-      transaction.add(secp256r1Instruction);
-      
-      // TODO: Thêm instruction thực thi đề xuất của moon wallet
-      // transaction.add(executeProposalInstruction);
-      
-      // 7. Gửi transaction
-      // Sử dụng skipPreflight để tránh lỗi với secp256r1 instruction
-      transaction.feePayer = payerKeypair.publicKey;
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      
-      try {
-        const txId = await sendAndConfirmTransaction(
-          connection,
-          transaction,
-          [payerKeypair],
-          {
-            skipPreflight: false, // Thêm skipPreflight để tránh lỗi
-            preflightCommitment: 'confirmed'
-          }
-        );
-        
-        setStatus(`Đã thực thi đề xuất thành công! TxID: ${txId}`);
-        
-        // Tải lại danh sách đề xuất
-        loadMultisigProposals(multisigInfo.pubkey, program);
-        
-        // Cập nhật trạng thái đề xuất thành 'executed' trong Firebase chỉ khi giao dịch thành công
-        try {
-          await updateProposalStatus(
-            multisigInfo.pubkey.toString(),
-            parseInt(proposalId),
-            'executed',
-            txId  // Sử dụng biến txId từ kết quả của quá trình thực thi
-          );
-          console.log(`Đã cập nhật trạng thái đề xuất ${proposalId} thành 'executed'`);
-        } catch (firebaseError) {
-          console.error("Lỗi khi cập nhật trạng thái đề xuất trên Firebase:", firebaseError);
-          // Không throw error ở đây vì transaction blockchain đã thành công
-        }
-      } catch (txError) {
-        console.error("Lỗi khi gửi giao dịch:", txError);
-        setStatus(`Lỗi khi gửi giao dịch: ${txError instanceof Error ? txError.message : String(txError)}`);
-      }
-    } catch (error) {
-      console.error("Lỗi khi thực thi đề xuất:", error);
-      setStatus(`Lỗi: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  // Hàm định dạng trạng thái đề xuất
-  const formatProposalStatus = (status: string) => {
-    switch (status) {
-      case 'Pending':
-        return 'Đang chờ';
-      case 'Executed':
-        return 'Đã thực thi';
-      case 'Rejected':
-        return 'Đã từ chối';
-      case 'Expired':
-        return 'Đã hết hạn';
-      default:
-        return status;
-    }
-  };
-  
-  // Hàm định dạng địa chỉ ngắn gọn
-  const formatAddress = (address: string) => {
-    if (!address) return '';
-    return `${address.substring(0, 4)}...${address.substring(address.length - 4)}`;
-  };
   
   // Hiển thị form transfer nếu đã đăng nhập thành công
   const toggleTransferForm = () => {
@@ -1340,91 +1055,136 @@ export const MultisigPanel: React.FC<MultisigPanelProps> = ({ credentialId, conn
   }, [multisigAddress]);
 
   return (
-    <div style={styles.container}>
-      <h2 style={styles.header}>Ví Đa Chữ Ký</h2>
+    <div style={{ fontFamily: 'Arial, sans-serif', margin: '20px', padding: '20px' }}>
+      <h2>Ví đa chữ ký Moon Wallet</h2>
       
       {isLoading ? (
-        <p>Đang tải...</p>
-      ) : (
-        <>
-          {status && (
-            <div style={{...styles.statusMessage, ...styles.info}}>
-              <pre>{status}</pre>
+        <div>Đang tải thông tin ví đa chữ ký...</div>
+      ) : multisigAddress ? (
+        <div>
+          <div style={styles.container}>
+            <h3 style={styles.header}>Thông tin ví</h3>
+            <p><strong>Địa chỉ ví:</strong> {multisigAddress.toString()}</p>
+            {multisigInfo && (
+              <div>
+                <p><strong>Guardians:</strong> {multisigInfo.guardians?.length || 0}</p>
+                <p><strong>Ngưỡng ký cần thiết:</strong> {multisigInfo.threshold !== undefined ? multisigInfo.threshold : 'Chưa xác định'}</p>
+              </div>
+            )}
+            
+            {/* Nút để chuyển đến trang danh sách đề xuất */}
+            <button 
+              style={styles.buttonSecondary}
+              onClick={goToProposalList}
+            >
+              Xem danh sách đề xuất
+            </button>
+            
+            {/* Nút để mở form tạo đề xuất chuyển tiền */}
+            <button 
+              style={styles.button}
+              onClick={toggleTransferForm}
+            >
+              {showTransferForm ? 'Đóng form chuyển tiền' : 'Tạo đề xuất chuyển tiền'}
+            </button>
+          </div>
+          
+          {/* Hiển thị QR code và link ký đề xuất */}
+          {showProposalQR && proposalSigningLink && (
+            <div style={styles.container}>
+              <h3 style={styles.header}>Chia sẻ link ký đề xuất</h3>
+              <p>Các guardian có thể quét mã QR hoặc sử dụng link dưới đây để ký đề xuất:</p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '20px 0' }}>
+                <QRCode value={proposalSigningLink} size={200} />
+                
+                <div style={{ width: '100%', marginTop: '20px' }}>
+                  <input 
+                    type="text" 
+                    value={proposalSigningLink} 
+                    readOnly 
+                    style={{ ...styles.input, width: 'calc(100% - 120px)' }}
+                  />
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(proposalSigningLink);
+                      alert("Đã sao chép link!");
+                    }}
+                    style={{...styles.buttonSecondary, marginLeft: '10px', padding: '8px 15px'}}
+                  >
+                    Sao chép
+                  </button>
+                </div>
+                
+                <p style={{ marginTop: '10px', fontSize: '14px', color: '#666' }}>
+                  Guardians có thể truy cập link này để ký đề xuất mà không cần đăng nhập vào ứng dụng.
+                </p>
+              </div>
+              
+              <button 
+                onClick={() => setShowProposalQR(false)}
+                style={{...styles.buttonSecondary, backgroundColor: '#999'}}
+              >
+                Đóng
+              </button>
             </div>
           )}
           
-          {showMultisigPanel && multisigAddress && (
-            <>
+          {/* Form tạo đề xuất chuyển tiền */}
+          {showTransferForm && (
+            <div style={styles.container}>
+              <h3 style={styles.header}>Tạo đề xuất chuyển tiền</h3>
+              
               <div style={styles.inputGroup}>
-                <label style={styles.label}>Địa chỉ ví:</label>
-                <div>{multisigAddress.toString()}</div>
+                <label style={styles.label}>Mô tả đề xuất:</label>
+                <input 
+                  type="text"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)} 
+                  placeholder="Mô tả mục đích chuyển tiền"
+                  disabled={isLoading}
+                  style={styles.input}
+                />
               </div>
               
               <div style={styles.inputGroup}>
-                <button 
-                  style={styles.button}
-                  onClick={toggleTransferForm}
-                >
-                  {showTransferForm ? 'Ẩn Form Chuyển Tiền' : 'Hiện Form Chuyển Tiền'}
-                </button>
-                
-                {/* Thêm nút để chuyển đến trang danh sách đề xuất */}
-                <button 
-                  style={{...styles.button, marginLeft: '10px', backgroundColor: '#4CAF50'}}
-                  onClick={goToProposalList}
-                >
-                  Xem Danh Sách Đề Xuất
-                </button>
+                <label style={styles.label}>Địa chỉ nhận:</label>
+                <input 
+                  type="text"
+                  value={destinationAddress}
+                  onChange={(e) => setDestinationAddress(e.target.value)} 
+                  placeholder="Địa chỉ ví Solana nhận tiền"
+                  disabled={isLoading}
+                  style={styles.input}
+                />
               </div>
               
-              {showTransferForm && (
-                <div style={{border: '1px solid #ddd', padding: '15px', marginTop: '15px'}}>
-                  <h3>Chuyển Tiền</h3>
-                  <div style={styles.inputGroup}>
-                    <label style={styles.label}>Địa chỉ nhận:</label>
-                    <input
-                      type="text"
-                      style={styles.input}
-                      value={destinationAddress}
-                      onChange={(e) => setDestinationAddress(e.target.value)}
-                      placeholder="Địa chỉ ví nhận SOL"
-                    />
-                  </div>
-                  
-                  <div style={styles.inputGroup}>
-                    <label style={styles.label}>Số lượng SOL:</label>
-                    <input
-                      type="text"
-                      style={styles.input}
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="Số lượng SOL"
-                    />
-                  </div>
-                  
-                  <div style={styles.inputGroup}>
-                    <label style={styles.label}>Mô tả:</label>
-                    <input
-                      type="text"
-                      style={styles.input}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Mô tả giao dịch"
-                    />
-                  </div>
-                  
-                  <button
-                    style={styles.button}
-                    onClick={handleCreateProposal}
-                    disabled={isLoading}
-                  >
-                    Tạo Đề Xuất Chuyển Tiền
-                  </button>
-                </div>
-              )}
-            </>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Số lượng SOL:</label>
+                <input 
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)} 
+                  placeholder="Nhập số lượng SOL"
+                  disabled={isLoading}
+                  step="0.001"
+                  min="0"
+                  style={styles.input}
+                />
+              </div>
+              
+              <button
+                style={styles.button}
+                onClick={handleCreateProposal}
+                disabled={isLoading}
+              >
+                Tạo Đề Xuất Chuyển Tiền
+              </button>
+            </div>
           )}
-        </>
+        </div>
+      ) : (
+        <div>Không tìm thấy thông tin ví đa chữ ký.</div>
       )}
     </div>
   );
